@@ -6,8 +6,12 @@ import logging
 from uuid import uuid4
 
 from .models import (
+    DecayResult,
     MemoryArchiveRequest,
     MemoryArchiveResponse,
+    MemoryDecayEvaluation,
+    MemoryDecayRequest,
+    MemoryDecayResponse,
     MemoryMutationResponse,
     MemoryQueryEvaluation,
     MemoryQueryRequest,
@@ -30,6 +34,10 @@ class MemoryRepository(ABC):
 
     @abstractmethod
     def archive(self, request: MemoryArchiveRequest) -> MemoryArchiveResponse:
+        raise NotImplementedError
+
+    @abstractmethod
+    def decay(self, request: MemoryDecayRequest) -> MemoryDecayResponse:
         raise NotImplementedError
 
 
@@ -124,6 +132,44 @@ class InMemoryMemoryRepository(MemoryRepository):
         logger.info("memory_archived", extra={"memory_id": updated.memory_id})
         return MemoryArchiveResponse(memory=updated, archived=True)
 
+    def decay(self, request: MemoryDecayRequest) -> MemoryDecayResponse:
+        now = datetime.now(timezone.utc)
+        results: list[DecayResult] = []
+        archived_count = 0
+
+        for memory_id, memory in list(self._records.items()):
+            if memory.archived and not request.include_archived:
+                continue
+            strength, reason = self._compute_strength(memory, now, request.max_idle_days)
+            should_archive = strength < request.threshold
+            updated = memory
+            if should_archive and not memory.archived:
+                updated = memory.model_copy(
+                    update={
+                        "archived": True,
+                        "updated_at": now,
+                    }
+                )
+                self._records[memory_id] = updated
+                archived_count += 1
+            results.append(
+                DecayResult(
+                    memory_id=memory_id,
+                    strength=round(strength, 2),
+                    archived=updated.archived,
+                    reason=reason,
+                )
+            )
+
+        return MemoryDecayResponse(
+            results=results,
+            evaluation=MemoryDecayEvaluation(
+                processed_count=len(results),
+                archived_count=archived_count,
+                threshold=request.threshold,
+            ),
+        )
+
     def _find_existing(self, request: MemoryUpsertRequest) -> MemoryRecord | None:
         if request.memory_id and request.memory_id in self._records:
             return self._records[request.memory_id]
@@ -158,6 +204,28 @@ class InMemoryMemoryRepository(MemoryRepository):
             merged.append(cleaned)
         return merged
 
+    def _compute_strength(
+        self,
+        memory: MemoryRecord,
+        now: datetime,
+        max_idle_days: int,
+    ) -> tuple[float, str]:
+        age_days = max(0.0, (now - memory.updated_at).total_seconds() / 86400.0)
+        last_seen = memory.last_accessed_at or memory.updated_at
+        idle_days = max(0.0, (now - last_seen).total_seconds() / 86400.0)
+        age_penalty = min(0.35, age_days / 365.0)
+        idle_penalty = min(0.3, idle_days / max(1, max_idle_days) * 0.3)
+        reinforcement_bonus = min(0.25, 0.05 * memory.reinforcement_count)
+        contradiction_penalty = min(0.35, 0.12 * memory.contradiction_count)
+        strength = memory.confidence + reinforcement_bonus - contradiction_penalty - age_penalty - idle_penalty
+        bounded = max(0.0, min(1.0, strength))
+        reason = (
+            f"confidence={memory.confidence:.2f}, reinforcement_bonus={reinforcement_bonus:.2f}, "
+            f"contradiction_penalty={contradiction_penalty:.2f}, age_penalty={age_penalty:.2f}, "
+            f"idle_penalty={idle_penalty:.2f}"
+        )
+        return bounded, reason
+
 
 class MemoryStore:
     def __init__(self, repository: MemoryRepository | None = None) -> None:
@@ -171,3 +239,6 @@ class MemoryStore:
 
     def archive(self, request: MemoryArchiveRequest) -> MemoryArchiveResponse:
         return self.repository.archive(request)
+
+    def decay(self, request: MemoryDecayRequest) -> MemoryDecayResponse:
+        return self.repository.decay(request)

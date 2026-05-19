@@ -1019,3 +1019,87 @@ def test_prompt_assembler_still_works_without_matching_memories():
     payload = response.json()
     assert response.status_code == 200
     assert "RETRIEVED LONG-TERM MEMORIES" in payload["prompt"]["rendered_prompt"]
+
+
+def test_memory_decay_archives_weak_stale_memories():
+    create_response = client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "episodic",
+            "key": "decay.weak.case",
+            "value": "Low-value stale memory.",
+            "confidence": 0.05,
+            "source_turn_id": "turn-decay-1",
+            "tags": ["decay"],
+            "evidence": ["Weak memory for decay test."],
+            "metadata": {},
+        },
+    )
+    memory_id = create_response.json()["memory"]["memory_id"]
+
+    query_response = client.post(
+        "/memory/query",
+        json={
+            "memory_type": "episodic",
+            "query_text": "Low-value stale memory",
+            "limit": 1,
+        },
+    )
+    assert query_response.status_code == 200
+
+    decay_response = client.post(
+        "/memory/decay",
+        json={
+            "threshold": 0.4,
+            "max_idle_days": 0,
+        },
+    )
+    payload = decay_response.json()
+    assert decay_response.status_code == 200
+    matching = [result for result in payload["results"] if result["memory_id"] == memory_id]
+    assert matching
+    assert matching[0]["archived"] is True
+
+
+def test_memory_decay_keeps_reinforced_strong_memories_active():
+    first = client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "preference",
+            "key": "decay.strong.case",
+            "value": "User prefers detailed architectural answers.",
+            "confidence": 0.9,
+            "source_turn_id": "turn-decay-2",
+            "tags": ["preference", "decay"],
+            "evidence": ["Strong durable preference."],
+        },
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "preference",
+            "key": "decay.strong.case",
+            "value": "User prefers detailed architectural answers.",
+            "confidence": 0.92,
+            "source_turn_id": "turn-decay-3",
+            "tags": ["preference", "decay"],
+            "evidence": ["Repeated preference signal."],
+        },
+    )
+    memory_id = second.json()["memory"]["memory_id"]
+
+    decay_response = client.post(
+        "/memory/decay",
+        json={
+            "threshold": 0.4,
+            "max_idle_days": 365,
+        },
+    )
+    payload = decay_response.json()
+    assert decay_response.status_code == 200
+    matching = [result for result in payload["results"] if result["memory_id"] == memory_id]
+    assert matching
+    assert matching[0]["archived"] is False
+    assert matching[0]["strength"] >= 0.4

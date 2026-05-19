@@ -15,6 +15,8 @@ from .models import (
     MemoryCommitResponse,
     MemoryArchiveRequest,
     MemoryArchiveResponse,
+    MemoryDecayRequest,
+    MemoryDecayResponse,
     MemoryMutationResponse,
     MemoryQueryRequest,
     MemoryQueryResponse,
@@ -87,6 +89,10 @@ def create_app() -> FastAPI:
     @app.post("/memory/archive", response_model=MemoryArchiveResponse)
     def archive_memory(request: MemoryArchiveRequest) -> MemoryArchiveResponse:
         return memory_store.archive(request)
+
+    @app.post("/memory/decay", response_model=MemoryDecayResponse)
+    def decay_memory(request: MemoryDecayRequest) -> MemoryDecayResponse:
+        return memory_store.decay(request)
 
     @app.post("/memory/retrieve", response_model=MemoryRetrievalResponse)
     def retrieve_memory(request: MemoryRetrievalRequest) -> MemoryRetrievalResponse:

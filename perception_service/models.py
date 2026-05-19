@@ -368,6 +368,30 @@ class MemoryArchiveResponse(BaseModel):
     archived: bool
 
 
+class MemoryDecayRequest(BaseModel):
+    threshold: float = Field(default=0.35, ge=0.0, le=1.0)
+    max_idle_days: int = Field(default=30, ge=0)
+    include_archived: bool = False
+
+
+class DecayResult(BaseModel):
+    memory_id: str
+    strength: float = Field(ge=0.0, le=1.0)
+    archived: bool
+    reason: str
+
+
+class MemoryDecayEvaluation(BaseModel):
+    processed_count: int = Field(ge=0)
+    archived_count: int = Field(ge=0)
+    threshold: float = Field(ge=0.0, le=1.0)
+
+
+class MemoryDecayResponse(BaseModel):
+    results: list[DecayResult] = Field(default_factory=list)
+    evaluation: MemoryDecayEvaluation
+
+
 class RetrievedMemory(BaseModel):
     memory_id: str
     memory_type: str
