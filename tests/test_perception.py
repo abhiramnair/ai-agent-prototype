@@ -613,3 +613,118 @@ def test_critic_flags_missing_uncertainty_when_required():
     assert response.status_code == 200
     assert payload["evaluation"]["requires_revision"] is True
     assert any(finding["category"] == "uncertainty" for finding in payload["review"]["findings"])
+
+
+def test_memory_store_upsert_and_query_round_trip():
+    upsert_response = client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "preference",
+            "key": "answer_style.depth",
+            "value": "deep",
+            "confidence": 0.88,
+            "source_turn_id": "turn-pref-1",
+            "tags": ["preferences", "style"],
+            "evidence": ["User asked to go deeper into architecture."],
+            "metadata": {"scope": "conversation"},
+        },
+    )
+    upsert_payload = upsert_response.json()
+    assert upsert_response.status_code == 200
+    assert upsert_payload["created"] is True
+    assert upsert_payload["memory"]["reinforcement_count"] == 1
+
+    query_response = client.post(
+        "/memory/query",
+        json={
+            "memory_type": "preference",
+            "query_text": "answer_style.depth deep",
+            "tags": ["preferences"],
+            "limit": 5,
+        },
+    )
+    query_payload = query_response.json()
+    assert query_response.status_code == 200
+    assert query_payload["memories"]
+    assert query_payload["memories"][0]["key"] == "answer_style.depth"
+    assert query_payload["evaluation"]["used_type_filter"] is True
+
+
+def test_memory_store_reinforces_existing_record():
+    first = client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "procedural",
+            "key": "planning.next_step",
+            "value": "move to memory store after the first conversational loop",
+            "confidence": 0.81,
+            "source_turn_id": "turn-proc-1",
+            "tags": ["planning"],
+            "evidence": ["Conversation sequence locked after response critic."],
+        },
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "procedural",
+            "key": "planning.next_step",
+            "value": "move to memory store after the first conversational loop",
+            "confidence": 0.9,
+            "source_turn_id": "turn-proc-2",
+            "tags": ["planning", "memory"],
+            "evidence": ["User confirmed memory store is the next step."],
+        },
+    )
+    payload = second.json()
+    assert second.status_code == 200
+    assert payload["created"] is False
+    assert payload["memory"]["reinforcement_count"] >= 2
+    assert "memory" in payload["memory"]["tags"]
+
+
+def test_memory_store_archive_hides_records_by_default():
+    create_response = client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "episodic",
+            "key": "milestone.first_loop",
+            "value": "Completed the first conversational loop through response critic.",
+            "confidence": 0.93,
+            "source_turn_id": "turn-archive-1",
+            "tags": ["milestone"],
+            "evidence": ["Perception through critic is implemented."],
+        },
+    )
+    memory_id = create_response.json()["memory"]["memory_id"]
+
+    archive_response = client.post(
+        "/memory/archive",
+        json={"memory_id": memory_id},
+    )
+    assert archive_response.status_code == 200
+    assert archive_response.json()["archived"] is True
+
+    hidden_query = client.post(
+        "/memory/query",
+        json={
+            "memory_type": "episodic",
+            "query_text": "milestone first conversational loop",
+            "limit": 5,
+        },
+    )
+    assert hidden_query.status_code == 200
+    assert hidden_query.json()["memories"] == []
+
+    visible_query = client.post(
+        "/memory/query",
+        json={
+            "memory_type": "episodic",
+            "query_text": "milestone first conversational loop",
+            "include_archived": True,
+            "limit": 5,
+        },
+    )
+    assert visible_query.status_code == 200
+    assert visible_query.json()["memories"]

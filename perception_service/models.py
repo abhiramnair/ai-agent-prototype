@@ -300,3 +300,67 @@ class CriticEvaluation(BaseModel):
 class CriticResponse(BaseModel):
     review: CriticReview
     evaluation: CriticEvaluation
+
+
+class MemoryRecord(BaseModel):
+    memory_id: str
+    memory_type: str
+    key: str
+    value: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    source_turn_id: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+    last_accessed_at: datetime | None = None
+    reinforcement_count: int = Field(default=0, ge=0)
+    contradiction_count: int = Field(default=0, ge=0)
+    archived: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class MemoryUpsertRequest(BaseModel):
+    memory_type: str
+    key: str
+    value: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    source_turn_id: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    memory_id: str | None = None
+
+
+class MemoryQueryRequest(BaseModel):
+    memory_type: str | None = None
+    query_text: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    include_archived: bool = False
+    limit: int = Field(default=10, ge=1, le=100)
+
+
+class MemoryQueryEvaluation(BaseModel):
+    total_matches: int = Field(ge=0)
+    used_type_filter: bool
+    used_text_filter: bool
+    used_tag_filter: bool
+
+
+class MemoryQueryResponse(BaseModel):
+    memories: list[MemoryRecord] = Field(default_factory=list)
+    evaluation: MemoryQueryEvaluation
+
+
+class MemoryMutationResponse(BaseModel):
+    memory: MemoryRecord
+    created: bool
+
+
+class MemoryArchiveRequest(BaseModel):
+    memory_id: str
+
+
+class MemoryArchiveResponse(BaseModel):
+    memory: MemoryRecord
+    archived: bool

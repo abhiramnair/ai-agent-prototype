@@ -11,6 +11,12 @@ from .models import (
     DialoguePlanResponse,
     GenerationRequest,
     GenerationResponse,
+    MemoryArchiveRequest,
+    MemoryArchiveResponse,
+    MemoryMutationResponse,
+    MemoryQueryRequest,
+    MemoryQueryResponse,
+    MemoryUpsertRequest,
     PerceptionState,
     PromptAssemblyRequest,
     PromptAssemblyResponse,
@@ -21,6 +27,7 @@ from .models import (
 from .critic import ResponseCritic
 from .dialogue_planner import DialoguePlanner
 from .generator import BaseLLMGenerator
+from .memory_store import MemoryStore
 from .pipeline import PerceptionPipeline
 from .prompt_assembler import PromptAssembler
 from .working_memory import WorkingMemoryManager
@@ -35,6 +42,7 @@ def create_app() -> FastAPI:
     prompt_assembler = PromptAssembler()
     generator = BaseLLMGenerator()
     critic = ResponseCritic()
+    memory_store = MemoryStore()
 
     @app.post("/perception/analyze", response_model=PerceptionState)
     def analyze_perception(turn: TurnInput) -> PerceptionState:
@@ -59,5 +67,17 @@ def create_app() -> FastAPI:
     @app.post("/critic/review", response_model=CriticResponse)
     def review_response(request: CriticRequest) -> CriticResponse:
         return critic.review(request)
+
+    @app.post("/memory/upsert", response_model=MemoryMutationResponse)
+    def upsert_memory(request: MemoryUpsertRequest) -> MemoryMutationResponse:
+        return memory_store.upsert(request)
+
+    @app.post("/memory/query", response_model=MemoryQueryResponse)
+    def query_memory(request: MemoryQueryRequest) -> MemoryQueryResponse:
+        return memory_store.query(request)
+
+    @app.post("/memory/archive", response_model=MemoryArchiveResponse)
+    def archive_memory(request: MemoryArchiveRequest) -> MemoryArchiveResponse:
+        return memory_store.archive(request)
 
     return app
