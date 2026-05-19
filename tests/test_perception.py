@@ -440,7 +440,7 @@ def test_generator_returns_response_from_assembled_prompt():
     payload = response.json()
     assert response.status_code == 200
     assert payload["output"]["response_text"]
-    assert payload["output"]["metadata"]["provider_name"] == "mock"
+    assert payload["output"]["metadata"]["provider_name"] in {"mock", "ollama"}
     assert payload["evaluation"]["response_nonempty"] is True
 
 

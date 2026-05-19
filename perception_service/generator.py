@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import json
 import logging
+import os
 import time
+from urllib import error, request
 
 from .models import (
     GenerationEvaluation,
@@ -87,12 +90,83 @@ class MockLLMProvider(LLMProvider):
         return "Here's the response."
 
 
+class OllamaProvider(LLMProvider):
+    provider_name = "ollama"
+
+    def __init__(
+        self,
+        model_name: str | None = None,
+        base_url: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> None:
+        self.model_name = model_name or os.getenv("OLLAMA_MODEL", "qwen3:4b")
+        self.base_url = (base_url or os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")).rstrip("/")
+        self.timeout_seconds = timeout_seconds or float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "90"))
+
+    def generate(self, prompt: PromptAssembly) -> GeneratorOutput:
+        started = time.perf_counter()
+        body = {
+            "model": self.model_name,
+            "prompt": prompt.rendered_prompt,
+            "stream": False,
+        }
+        payload = json.dumps(body).encode("utf-8")
+        req = request.Request(
+            url=f"{self.base_url}/api/generate",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with request.urlopen(req, timeout=self.timeout_seconds) as response:
+                raw = response.read().decode("utf-8")
+        except error.URLError as exc:
+            raise RuntimeError(f"Unable to reach Ollama at {self.base_url}: {exc}") from exc
+
+        data = json.loads(raw)
+        response_text = str(data.get("response", "")).strip()
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        return GeneratorOutput(
+            response_text=response_text,
+            response_mode=str(prompt.response_plan.get("response_mode", "direct_response")),
+            metadata=GenerationMetadata(
+                provider_name=self.provider_name,
+                model_name=self.model_name,
+                finish_reason=str(data.get("done_reason", "completed")),
+                latency_ms=round(latency_ms, 2),
+                token_usage={
+                    "prompt_eval_count": int(data.get("prompt_eval_count", 0) or 0),
+                    "eval_count": int(data.get("eval_count", 0) or 0),
+                },
+            ),
+            debug_signals={
+                "base_url": self.base_url,
+                "instruction_count": len(prompt.instructions),
+                "used_ollama_provider": True,
+            },
+        )
+
+
+def build_default_provider() -> LLMProvider:
+    provider_name = os.getenv("AI_AGENT_LLM_PROVIDER", "ollama").strip().lower()
+    if provider_name == "mock":
+        return MockLLMProvider()
+    if provider_name == "ollama":
+        return OllamaProvider()
+    return MockLLMProvider()
+
+
 class BaseLLMGenerator:
-    def __init__(self, provider: LLMProvider | None = None) -> None:
-        self.provider = provider or MockLLMProvider()
+    def __init__(
+        self,
+        provider: LLMProvider | None = None,
+        fallback_provider: LLMProvider | None = None,
+    ) -> None:
+        self.provider = provider or build_default_provider()
+        self.fallback_provider = fallback_provider or MockLLMProvider()
 
     def generate(self, request: GenerationRequest) -> GenerationResponse:
-        output = self.provider.generate(request.prompt)
+        output = self._generate_with_fallback(request.prompt)
         evaluation = GenerationEvaluation(
             response_nonempty=bool(output.response_text.strip()),
             includes_goal_alignment=request.prompt.current_subgoal.lower() in output.response_text.lower(),
@@ -100,6 +174,7 @@ class BaseLLMGenerator:
                 not request.prompt.response_plan.get("draft_constraints", {}).get("require_explicit_uncertainty", False)
                 or "assumption" in output.response_text.lower()
                 or "ambiguous" in output.response_text.lower()
+                or "uncertain" in output.response_text.lower()
             ),
         )
         logger.info(
@@ -111,3 +186,19 @@ class BaseLLMGenerator:
             },
         )
         return GenerationResponse(output=output, evaluation=evaluation)
+
+    def _generate_with_fallback(self, prompt: PromptAssembly) -> GeneratorOutput:
+        try:
+            return self.provider.generate(prompt)
+        except Exception as exc:
+            logger.warning("primary_generation_provider_failed", extra={"error": str(exc)})
+            fallback_output = self.fallback_provider.generate(prompt)
+            fallback_output.debug_signals.update(
+                {
+                    "fallback_used": True,
+                    "fallback_reason": str(exc),
+                    "preferred_provider": getattr(self.provider, "provider_name", self.provider.__class__.__name__),
+                    "preferred_model": getattr(self.provider, "model_name", "unknown"),
+                }
+            )
+            return fallback_output
