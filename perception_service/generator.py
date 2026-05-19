@@ -58,14 +58,14 @@ class MockLLMProvider(LLMProvider):
         )
 
         opening = self._opening_for_mode(response_mode)
-        goal_line = f"I’m focusing on {prompt.current_subgoal}."
-        detail_line = f"I’ll keep the answer at a {detail_level} level of detail."
+        goal_line = f"I'm focusing on {prompt.current_subgoal}."
+        detail_line = f"I'll keep the answer at a {detail_level} level of detail."
         include_line = ""
         if must_include:
-            include_line = "I’ll make sure to cover " + ", ".join(str(item) for item in must_include[:3]) + "."
+            include_line = "I'll make sure to cover " + ", ".join(str(item) for item in must_include[:3]) + "."
         uncertainty_line = ""
         if uncertainty_required:
-            uncertainty_line = "Some parts of this turn are ambiguous, so I’ll call out assumptions explicitly."
+            uncertainty_line = "Some parts of this turn are ambiguous, so I'll call out assumptions explicitly."
 
         return " ".join(
             part
@@ -75,16 +75,16 @@ class MockLLMProvider(LLMProvider):
 
     def _opening_for_mode(self, response_mode: str) -> str:
         if response_mode == "structured_explanation":
-            return "Here’s a structured explanation."
+            return "Here's a structured explanation."
         if response_mode == "execution_planning":
-            return "Here’s the next-step plan."
+            return "Here's the next-step plan."
         if response_mode == "option_generation":
             return "Here are the strongest options."
         if response_mode == "alignment_repair":
             return "Let me realign the answer."
         if response_mode == "clarify_before_answering":
             return "Before locking an answer, I need to handle the ambiguity carefully."
-        return "Here’s the response."
+        return "Here's the response."
 
 
 class BaseLLMGenerator:

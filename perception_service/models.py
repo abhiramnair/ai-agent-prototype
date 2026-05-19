@@ -262,3 +262,41 @@ class GenerationEvaluation(BaseModel):
 class GenerationResponse(BaseModel):
     output: GeneratorOutput
     evaluation: GenerationEvaluation
+
+
+class CriticFinding(BaseModel):
+    severity: str
+    category: str
+    message: str
+
+
+class CriticScores(BaseModel):
+    relevance: float = Field(ge=0.0, le=1.0)
+    clarity: float = Field(ge=0.0, le=1.0)
+    faithfulness_to_plan: float = Field(ge=0.0, le=1.0)
+    tone_fit: float = Field(ge=0.0, le=1.0)
+    hallucination_risk: float = Field(ge=0.0, le=1.0)
+
+
+class CriticReview(BaseModel):
+    passed: bool
+    scores: CriticScores
+    findings: list[CriticFinding] = Field(default_factory=list)
+    recommended_edits: list[str] = Field(default_factory=list)
+    debug_signals: dict[str, Any] = Field(default_factory=dict)
+
+
+class CriticRequest(BaseModel):
+    prompt: PromptAssembly
+    generation_output: GeneratorOutput
+
+
+class CriticEvaluation(BaseModel):
+    has_findings: bool
+    requires_revision: bool
+    score_summary: float = Field(ge=0.0, le=1.0)
+
+
+class CriticResponse(BaseModel):
+    review: CriticReview
+    evaluation: CriticEvaluation

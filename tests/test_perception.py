@@ -490,3 +490,126 @@ def test_generator_marks_uncertainty_guidance_for_ambiguous_prompt():
     payload = response.json()
     assert response.status_code == 200
     assert payload["evaluation"]["follows_uncertainty_guidance"] is True
+
+
+def test_critic_reviews_generated_response():
+    turn = make_turn(
+        turn_id="turn-10",
+        message_text="Can you explain how the response critic should work?",
+        recent_context={
+            "recent_turn_summaries": ["Base LLM generator was just added."],
+            "active_topic": "response critic",
+            "unresolved_questions": ["How should draft quality be scored?"],
+            "conversation_mode": "technical_collaboration",
+            "last_assistant_action": "implemented base generation",
+        },
+    )
+    perception_response = client.post("/perception/analyze", json=turn)
+    assert perception_response.status_code == 200
+
+    working_memory_response = client.post(
+        "/working-memory/update",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "current_state": None,
+        },
+    )
+    assert working_memory_response.status_code == 200
+
+    planner_response = client.post(
+        "/dialogue-planner/plan",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+        },
+    )
+    assert planner_response.status_code == 200
+
+    prompt_response = client.post(
+        "/prompt-assembler/assemble",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+            "dialogue_plan": planner_response.json()["plan"],
+        },
+    )
+    assert prompt_response.status_code == 200
+
+    generation_response = client.post(
+        "/generator/generate",
+        json={"prompt": prompt_response.json()["prompt"]},
+    )
+    assert generation_response.status_code == 200
+
+    response = client.post(
+        "/critic/review",
+        json={
+            "prompt": prompt_response.json()["prompt"],
+            "generation_output": generation_response.json()["output"],
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert "scores" in payload["review"]
+    assert payload["evaluation"]["score_summary"] >= 0.0
+
+
+def test_critic_flags_missing_uncertainty_when_required():
+    prompt_payload = {
+        "system_role": "You are the conversation generator in a modular cognitive system.",
+        "current_user_message": "This?",
+        "active_goal": "advance the conversation around general_conversation",
+        "current_subgoal": "continue the conversation around general_conversation",
+        "relevant_recent_context": [],
+        "working_memory_snapshot": {},
+        "perception_summary": {},
+        "response_plan": {
+            "response_mode": "clarify_before_answering",
+            "primary_goal": "advance the conversation around general_conversation",
+            "secondary_goal": "continue the conversation around general_conversation",
+            "reasoning_style": "direct",
+            "tone": "clear_direct",
+            "detail_level": "medium",
+            "clarification_policy": "ask_one_targeted_question",
+            "memory_use_policy": "retrieve_minimal_relevant_context",
+            "must_include": ["continue the conversation around general_conversation"],
+            "must_avoid": ["unsupported claims"],
+            "draft_constraints": {
+                "avoid_repetition": True,
+                "avoid_overclaiming": True,
+                "avoid_scope_drift": True,
+                "prefer_examples": False,
+                "require_explicit_uncertainty": True,
+            },
+        },
+        "instructions": ["State uncertainty explicitly when assumptions are necessary."],
+        "rendered_prompt": "test prompt",
+        "debug_signals": {},
+    }
+    generation_output = {
+        "response_text": "Here is a short answer with no caution.",
+        "response_mode": "clarify_before_answering",
+        "metadata": {
+            "provider_name": "mock",
+            "model_name": "mock-conversation-generator-v1",
+            "finish_reason": "completed",
+            "latency_ms": 1.0,
+            "token_usage": {},
+        },
+        "debug_signals": {},
+    }
+
+    response = client.post(
+        "/critic/review",
+        json={
+            "prompt": prompt_payload,
+            "generation_output": generation_output,
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["evaluation"]["requires_revision"] is True
+    assert any(finding["category"] == "uncertainty" for finding in payload["review"]["findings"])

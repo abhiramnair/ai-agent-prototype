@@ -5,6 +5,8 @@ import logging
 from fastapi import FastAPI
 
 from .models import (
+    CriticRequest,
+    CriticResponse,
     DialoguePlanRequest,
     DialoguePlanResponse,
     GenerationRequest,
@@ -16,6 +18,7 @@ from .models import (
     WorkingMemoryUpdateRequest,
     WorkingMemoryUpdateResponse,
 )
+from .critic import ResponseCritic
 from .dialogue_planner import DialoguePlanner
 from .generator import BaseLLMGenerator
 from .pipeline import PerceptionPipeline
@@ -31,6 +34,7 @@ def create_app() -> FastAPI:
     dialogue_planner = DialoguePlanner()
     prompt_assembler = PromptAssembler()
     generator = BaseLLMGenerator()
+    critic = ResponseCritic()
 
     @app.post("/perception/analyze", response_model=PerceptionState)
     def analyze_perception(turn: TurnInput) -> PerceptionState:
@@ -51,5 +55,9 @@ def create_app() -> FastAPI:
     @app.post("/generator/generate", response_model=GenerationResponse)
     def generate_response(request: GenerationRequest) -> GenerationResponse:
         return generator.generate(request)
+
+    @app.post("/critic/review", response_model=CriticResponse)
+    def review_response(request: CriticRequest) -> CriticResponse:
+        return critic.review(request)
 
     return app
