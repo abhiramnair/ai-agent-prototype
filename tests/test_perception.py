@@ -288,3 +288,100 @@ def test_dialogue_planner_handles_ambiguous_turns():
         "answer_with_assumption_if_safe",
     }
     assert payload["plan"]["draft_constraints"]["require_explicit_uncertainty"] is True
+
+
+def test_prompt_assembler_returns_structured_prompt():
+    turn = make_turn(
+        turn_id="turn-6",
+        message_text="Can you explain the prompt assembler with a concrete example?",
+        recent_context={
+            "recent_turn_summaries": ["Dialogue planner was just implemented."],
+            "active_topic": "prompt assembler",
+            "unresolved_questions": ["What should the model actually receive?"],
+            "conversation_mode": "technical_collaboration",
+            "last_assistant_action": "implemented dialogue planner",
+        },
+    )
+    perception_response = client.post("/perception/analyze", json=turn)
+    assert perception_response.status_code == 200
+
+    working_memory_response = client.post(
+        "/working-memory/update",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "current_state": None,
+        },
+    )
+    assert working_memory_response.status_code == 200
+
+    planner_response = client.post(
+        "/dialogue-planner/plan",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+        },
+    )
+    assert planner_response.status_code == 200
+
+    response = client.post(
+        "/prompt-assembler/assemble",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+            "dialogue_plan": planner_response.json()["plan"],
+        },
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["prompt"]["system_role"]
+    assert payload["prompt"]["rendered_prompt"]
+    assert "SYSTEM ROLE" in payload["prompt"]["rendered_prompt"]
+    assert "CURRENT USER MESSAGE" in payload["prompt"]["rendered_prompt"]
+    assert payload["evaluation"]["includes_recent_context"] is True
+    assert payload["evaluation"]["includes_constraints"] is True
+
+
+def test_prompt_assembler_includes_uncertainty_guidance_when_needed():
+    turn = make_turn(
+        turn_id="turn-7",
+        message_text="This?",
+    )
+    perception_response = client.post("/perception/analyze", json=turn)
+    assert perception_response.status_code == 200
+
+    working_memory_response = client.post(
+        "/working-memory/update",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "current_state": None,
+        },
+    )
+    assert working_memory_response.status_code == 200
+
+    planner_response = client.post(
+        "/dialogue-planner/plan",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+        },
+    )
+    assert planner_response.status_code == 200
+
+    response = client.post(
+        "/prompt-assembler/assemble",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+            "dialogue_plan": planner_response.json()["plan"],
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["evaluation"]["includes_uncertainty_guidance"] is True

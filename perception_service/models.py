@@ -199,3 +199,36 @@ class DialoguePlanEvaluation(BaseModel):
 class DialoguePlanResponse(BaseModel):
     plan: DialoguePlan
     evaluation: DialoguePlanEvaluation
+
+
+class PromptAssembly(BaseModel):
+    system_role: str
+    current_user_message: str
+    active_goal: str
+    current_subgoal: str
+    relevant_recent_context: list[str] = Field(default_factory=list)
+    working_memory_snapshot: dict[str, Any] = Field(default_factory=dict)
+    perception_summary: dict[str, Any] = Field(default_factory=dict)
+    response_plan: dict[str, Any] = Field(default_factory=dict)
+    instructions: list[str] = Field(default_factory=list)
+    rendered_prompt: str
+    debug_signals: dict[str, Any] = Field(default_factory=dict)
+
+
+class PromptAssemblyRequest(BaseModel):
+    turn_input: TurnInput
+    perception_state: PerceptionState
+    working_memory_state: WorkingMemoryState
+    dialogue_plan: DialoguePlan
+
+
+class PromptAssemblyEvaluation(BaseModel):
+    includes_recent_context: bool
+    includes_constraints: bool
+    includes_uncertainty_guidance: bool
+    rendered_prompt_nonempty: bool
+
+
+class PromptAssemblyResponse(BaseModel):
+    prompt: PromptAssembly
+    evaluation: PromptAssemblyEvaluation

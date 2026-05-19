@@ -8,12 +8,15 @@ from .models import (
     DialoguePlanRequest,
     DialoguePlanResponse,
     PerceptionState,
+    PromptAssemblyRequest,
+    PromptAssemblyResponse,
     TurnInput,
     WorkingMemoryUpdateRequest,
     WorkingMemoryUpdateResponse,
 )
 from .dialogue_planner import DialoguePlanner
 from .pipeline import PerceptionPipeline
+from .prompt_assembler import PromptAssembler
 from .working_memory import WorkingMemoryManager
 
 
@@ -23,6 +26,7 @@ def create_app() -> FastAPI:
     pipeline = PerceptionPipeline()
     working_memory = WorkingMemoryManager()
     dialogue_planner = DialoguePlanner()
+    prompt_assembler = PromptAssembler()
 
     @app.post("/perception/analyze", response_model=PerceptionState)
     def analyze_perception(turn: TurnInput) -> PerceptionState:
@@ -35,5 +39,9 @@ def create_app() -> FastAPI:
     @app.post("/dialogue-planner/plan", response_model=DialoguePlanResponse)
     def create_dialogue_plan(request: DialoguePlanRequest) -> DialoguePlanResponse:
         return dialogue_planner.create_plan(request)
+
+    @app.post("/prompt-assembler/assemble", response_model=PromptAssemblyResponse)
+    def assemble_prompt(request: PromptAssemblyRequest) -> PromptAssemblyResponse:
+        return prompt_assembler.assemble_prompt(request)
 
     return app
