@@ -3,13 +3,16 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import logging
 
+from .memory_retriever import MemoryRetriever
 from .models import (
     DialoguePlan,
+    MemoryRetrievalRequest,
     PerceptionState,
     PromptAssembly,
     PromptAssemblyEvaluation,
     PromptAssemblyRequest,
     PromptAssemblyResponse,
+    RetrievedMemory,
     TurnInput,
     WorkingMemoryState,
 )
@@ -25,6 +28,7 @@ class PromptAssemblerHook(ABC):
         perception: PerceptionState,
         working_memory: WorkingMemoryState,
         dialogue_plan: DialoguePlan,
+        retrieved_memories: list[RetrievedMemory],
     ) -> PromptAssembly:
         raise NotImplementedError
 
@@ -38,15 +42,17 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
         perception: PerceptionState,
         working_memory: WorkingMemoryState,
         dialogue_plan: DialoguePlan,
+        retrieved_memories: list[RetrievedMemory],
     ) -> PromptAssembly:
         relevant_recent_context = self._collect_recent_context(turn, working_memory)
         working_memory_snapshot = self._build_working_memory_snapshot(working_memory)
         perception_summary = self._build_perception_summary(perception)
         response_plan = self._build_response_plan(dialogue_plan)
-        instructions = self._build_instructions(perception, dialogue_plan)
+        instructions = self._build_instructions(perception, dialogue_plan, retrieved_memories)
         rendered_prompt = self._render_prompt(
             turn=turn,
             relevant_recent_context=relevant_recent_context,
+            retrieved_memories=retrieved_memories,
             working_memory=working_memory,
             perception_summary=perception_summary,
             response_plan=response_plan,
@@ -59,6 +65,7 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
             active_goal=working_memory.active_goal,
             current_subgoal=working_memory.current_subgoal,
             relevant_recent_context=relevant_recent_context,
+            retrieved_memories=retrieved_memories,
             working_memory_snapshot=working_memory_snapshot,
             perception_summary=perception_summary,
             response_plan=response_plan,
@@ -66,6 +73,7 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
             rendered_prompt=rendered_prompt,
             debug_signals={
                 "recent_context_count": len(relevant_recent_context),
+                "retrieved_memory_count": len(retrieved_memories),
                 "instruction_count": len(instructions),
                 "must_include_count": len(dialogue_plan.must_include),
             },
@@ -129,6 +137,7 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
         self,
         perception: PerceptionState,
         dialogue_plan: DialoguePlan,
+        retrieved_memories: list[RetrievedMemory],
     ) -> list[str]:
         instructions = [
             "Answer the user directly.",
@@ -143,12 +152,15 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
             instructions.append("State uncertainty explicitly when assumptions are necessary.")
         if perception.references_prior_context:
             instructions.append("Maintain continuity with recent context.")
+        if retrieved_memories:
+            instructions.append("Use retrieved long-term memories only when they are relevant and supportive.")
         return instructions
 
     def _render_prompt(
         self,
         turn: TurnInput,
         relevant_recent_context: list[str],
+        retrieved_memories: list[RetrievedMemory],
         working_memory: WorkingMemoryState,
         perception_summary: dict[str, object],
         response_plan: dict[str, object],
@@ -160,6 +172,7 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
             f"ACTIVE GOAL\n{working_memory.active_goal}",
             f"CURRENT SUBGOAL\n{working_memory.current_subgoal}",
             "RELEVANT RECENT CONTEXT\n" + self._render_list(relevant_recent_context),
+            "RETRIEVED LONG-TERM MEMORIES\n" + self._render_memories(retrieved_memories),
             "WORKING MEMORY SNAPSHOT\n" + self._render_dict(
                 {
                     "conversation_mode": working_memory.conversation_mode,
@@ -174,6 +187,17 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
             "INSTRUCTIONS\n" + self._render_list(instructions),
         ]
         return "\n\n".join(sections)
+
+    def _render_memories(self, memories: list[RetrievedMemory]) -> str:
+        if not memories:
+            return "- none"
+        lines: list[str] = []
+        for memory in memories:
+            lines.append(
+                f"- [{memory.memory_type}] {memory.key}: {memory.value} "
+                f"(score={memory.retrieval_score}, reason={memory.retrieval_reason})"
+            )
+        return "\n".join(lines)
 
     def _render_list(self, items: list[object]) -> str:
         if not items:
@@ -201,18 +225,26 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
 
 
 class PromptAssembler:
-    def __init__(self, hook: PromptAssemblerHook | None = None) -> None:
+    def __init__(
+        self,
+        hook: PromptAssemblerHook | None = None,
+        memory_retriever: MemoryRetriever | None = None,
+    ) -> None:
         self.hook = hook or DefaultPromptAssemblerHook()
+        self.memory_retriever = memory_retriever
 
     def assemble_prompt(self, request: PromptAssemblyRequest) -> PromptAssemblyResponse:
+        retrieved_memories = self._retrieve_memories(request) if self.memory_retriever else []
         prompt = self.hook.assemble(
             request.turn_input,
             request.perception_state,
             request.working_memory_state,
             request.dialogue_plan,
+            retrieved_memories,
         )
         evaluation = PromptAssemblyEvaluation(
             includes_recent_context=bool(prompt.relevant_recent_context),
+            includes_retrieved_memories=bool(prompt.retrieved_memories),
             includes_constraints=bool(prompt.response_plan.get("draft_constraints")),
             includes_uncertainty_guidance=any(
                 "uncertainty" in instruction.lower() for instruction in prompt.instructions
@@ -228,3 +260,36 @@ class PromptAssembler:
             },
         )
         return PromptAssemblyResponse(prompt=prompt, evaluation=evaluation)
+
+    def _retrieve_memories(self, request: PromptAssemblyRequest) -> list[RetrievedMemory]:
+        query_parts = [
+            request.turn_input.message_text.strip(),
+            request.perception_state.topic,
+            request.perception_state.possible_user_goal,
+        ]
+        query_text = " ".join(part for part in query_parts if part).strip()
+        tags: list[str] = []
+        if request.perception_state.salience_signals.contains_preference:
+            tags.append("preference")
+        if request.perception_state.salience_signals.contains_correction:
+            tags.append("correction")
+        retrieval = self.memory_retriever.retrieve(
+            MemoryRetrievalRequest(
+                query_text=query_text,
+                memory_types=[],
+                tags=tags,
+                limit=4,
+            )
+        )
+        if retrieval.memories:
+            return retrieval.memories
+
+        fallback = self.memory_retriever.retrieve(
+            MemoryRetrievalRequest(
+                query_text="",
+                memory_types=["preference", "procedural", "correction"],
+                tags=tags,
+                limit=3,
+            )
+        )
+        return fallback.memories

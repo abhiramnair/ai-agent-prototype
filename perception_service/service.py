@@ -45,12 +45,12 @@ def create_app() -> FastAPI:
     pipeline = PerceptionPipeline()
     working_memory = WorkingMemoryManager()
     dialogue_planner = DialoguePlanner()
-    prompt_assembler = PromptAssembler()
     generator = BaseLLMGenerator()
     critic = ResponseCritic()
     memory_store = MemoryStore()
     memory_retriever = MemoryRetriever(memory_store)
     memory_committer = MemoryCommitter(memory_store)
+    prompt_assembler = PromptAssembler(memory_retriever=memory_retriever)
 
     @app.post("/perception/analyze", response_model=PerceptionState)
     def analyze_perception(turn: TurnInput) -> PerceptionState:

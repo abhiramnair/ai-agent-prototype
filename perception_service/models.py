@@ -207,6 +207,7 @@ class PromptAssembly(BaseModel):
     active_goal: str
     current_subgoal: str
     relevant_recent_context: list[str] = Field(default_factory=list)
+    retrieved_memories: list[RetrievedMemory] = Field(default_factory=list)
     working_memory_snapshot: dict[str, Any] = Field(default_factory=dict)
     perception_summary: dict[str, Any] = Field(default_factory=dict)
     response_plan: dict[str, Any] = Field(default_factory=dict)
@@ -224,6 +225,7 @@ class PromptAssemblyRequest(BaseModel):
 
 class PromptAssemblyEvaluation(BaseModel):
     includes_recent_context: bool
+    includes_retrieved_memories: bool
     includes_constraints: bool
     includes_uncertainty_guidance: bool
     rendered_prompt_nonempty: bool

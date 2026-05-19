@@ -906,3 +906,116 @@ def test_memory_committer_can_dry_run_without_persisting():
     assert payload["evaluation"]["candidate_count"] >= 1
     assert payload["evaluation"]["persistence_enabled"] is False
     assert payload["committed_memories"] == []
+
+
+def test_prompt_assembler_includes_retrieved_long_term_memories():
+    client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "preference",
+            "key": "preference.response.style",
+            "value": "The user prefers deeper technical explanations with architecture detail.",
+            "confidence": 0.94,
+            "source_turn_id": "turn-prompt-memory-1",
+            "tags": ["preference", "style"],
+            "evidence": ["Stored preference for response depth."],
+        },
+    )
+
+    turn = make_turn(
+        turn_id="turn-prompt-memory-2",
+        message_text="Can you explain the architecture in more technical depth?",
+        recent_context={
+            "recent_turn_summaries": ["We implemented the memory committer."],
+            "active_topic": "architecture depth",
+            "unresolved_questions": [],
+            "conversation_mode": "technical_collaboration",
+            "last_assistant_action": "implemented learning logic",
+        },
+    )
+    perception_response = client.post("/perception/analyze", json=turn)
+    assert perception_response.status_code == 200
+
+    working_memory_response = client.post(
+        "/working-memory/update",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "current_state": None,
+        },
+    )
+    assert working_memory_response.status_code == 200
+
+    planner_response = client.post(
+        "/dialogue-planner/plan",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+        },
+    )
+    assert planner_response.status_code == 200
+
+    response = client.post(
+        "/prompt-assembler/assemble",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+            "dialogue_plan": planner_response.json()["plan"],
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["evaluation"]["includes_retrieved_memories"] is True
+    assert payload["prompt"]["retrieved_memories"]
+    assert "RETRIEVED LONG-TERM MEMORIES" in payload["prompt"]["rendered_prompt"]
+
+
+def test_prompt_assembler_still_works_without_matching_memories():
+    turn = make_turn(
+        turn_id="turn-prompt-memory-3",
+        message_text="What is the next clean module to build?",
+        recent_context={
+            "recent_turn_summaries": ["The current architecture is stable."],
+            "active_topic": "next module",
+            "unresolved_questions": [],
+            "conversation_mode": "technical_collaboration",
+            "last_assistant_action": "summarized progress",
+        },
+    )
+    perception_response = client.post("/perception/analyze", json=turn)
+    assert perception_response.status_code == 200
+
+    working_memory_response = client.post(
+        "/working-memory/update",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "current_state": None,
+        },
+    )
+    assert working_memory_response.status_code == 200
+
+    planner_response = client.post(
+        "/dialogue-planner/plan",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+        },
+    )
+    assert planner_response.status_code == 200
+
+    response = client.post(
+        "/prompt-assembler/assemble",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+            "dialogue_plan": planner_response.json()["plan"],
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert "RETRIEVED LONG-TERM MEMORIES" in payload["prompt"]["rendered_prompt"]
