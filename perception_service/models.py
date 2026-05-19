@@ -467,6 +467,7 @@ class AgentRunRequest(BaseModel):
     current_working_memory_state: WorkingMemoryState | None = None
     commit_memory: bool = True
     persist_committed_memory: bool = True
+    use_session_state: bool = True
 
 
 class AgentRunEvaluation(BaseModel):
@@ -474,6 +475,7 @@ class AgentRunEvaluation(BaseModel):
     critic_requires_revision: bool
     used_retrieved_memories: bool
     provider_name: str
+    used_session_state: bool
 
 
 class AgentRunResponse(BaseModel):
@@ -485,3 +487,29 @@ class AgentRunResponse(BaseModel):
     critic: CriticResponse
     memory_commit: MemoryCommitResponse | None = None
     evaluation: AgentRunEvaluation
+
+
+class SessionStateRecord(BaseModel):
+    session_id: str
+    working_memory_state: WorkingMemoryState
+    updated_at: datetime
+
+
+class SessionStateResponse(BaseModel):
+    session: SessionStateRecord | None = None
+    found: bool
+
+
+class ConfigResponse(BaseModel):
+    llm_provider: str
+    llm_model: str
+    ollama_base_url: str
+    test_provider_override: bool
+
+
+class HealthResponse(BaseModel):
+    status: str
+    llm_provider: str
+    llm_model: str
+    ollama_reachable: bool
+    memory_records_available: bool

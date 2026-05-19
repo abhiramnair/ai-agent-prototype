@@ -1169,3 +1169,66 @@ def test_agent_orchestrator_supports_dry_run_without_memory_persistence():
     assert payload["memory_commit"] is not None
     assert payload["memory_commit"]["committed_memories"] == []
     assert payload["evaluation"]["used_memory_commit"] is True
+
+
+def test_session_state_persists_across_agent_runs():
+    session_id = "session-orchestrator-state"
+    first_turn = make_turn(
+        turn_id="turn-session-1",
+        session_id=session_id,
+        message_text="Let's go with a technical collaboration mode.",
+    )
+    first_response = client.post(
+        "/agent/run",
+        json={
+            "turn_input": first_turn,
+            "commit_memory": False,
+            "persist_committed_memory": False,
+            "use_session_state": True,
+        },
+    )
+    assert first_response.status_code == 200
+
+    session_lookup = client.get(f"/session/{session_id}")
+    assert session_lookup.status_code == 200
+    assert session_lookup.json()["found"] is True
+
+    second_turn = make_turn(
+        turn_id="turn-session-2",
+        session_id=session_id,
+        message_text="Make it simpler.",
+        recent_context={
+            "recent_turn_summaries": ["The assistant explained the collaboration mode."],
+            "active_topic": "technical collaboration mode",
+            "unresolved_questions": [],
+            "conversation_mode": "technical_collaboration",
+            "last_assistant_action": "answered directly",
+        },
+    )
+    second_response = client.post(
+        "/agent/run",
+        json={
+            "turn_input": second_turn,
+            "commit_memory": False,
+            "persist_committed_memory": False,
+            "use_session_state": True,
+        },
+    )
+    payload = second_response.json()
+    assert second_response.status_code == 200
+    assert payload["evaluation"]["used_session_state"] is True
+    assert payload["working_memory"]["state"]["recent_turns_compact"]
+
+
+def test_config_and_health_endpoints_return_runtime_information():
+    config_response = client.get("/config")
+    assert config_response.status_code == 200
+    config_payload = config_response.json()
+    assert config_payload["llm_provider"] in {"mock", "ollama"}
+    assert config_payload["llm_model"]
+
+    health_response = client.get("/health")
+    assert health_response.status_code == 200
+    health_payload = health_response.json()
+    assert health_payload["status"] in {"ok", "degraded"}
+    assert "llm_provider" in health_payload

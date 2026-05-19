@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 import logging
+from urllib import error, request as urlrequest
 
 from fastapi import FastAPI
 
 from .models import (
     AgentRunRequest,
     AgentRunResponse,
+    ConfigResponse,
     CriticRequest,
     CriticResponse,
     DialoguePlanRequest,
@@ -25,9 +28,11 @@ from .models import (
     MemoryRetrievalRequest,
     MemoryRetrievalResponse,
     MemoryUpsertRequest,
+    HealthResponse,
     PerceptionState,
     PromptAssemblyRequest,
     PromptAssemblyResponse,
+    SessionStateResponse,
     TurnInput,
     WorkingMemoryUpdateRequest,
     WorkingMemoryUpdateResponse,
@@ -41,6 +46,7 @@ from .memory_store import MemoryStore
 from .orchestrator import AgentOrchestrator
 from .pipeline import PerceptionPipeline
 from .prompt_assembler import PromptAssembler
+from .session_state import SessionStateStore
 from .working_memory import WorkingMemoryManager
 
 
@@ -55,6 +61,7 @@ def create_app() -> FastAPI:
     memory_store = MemoryStore()
     memory_retriever = MemoryRetriever(memory_store)
     memory_committer = MemoryCommitter(memory_store)
+    session_state_store = SessionStateStore()
     prompt_assembler = PromptAssembler(memory_retriever=memory_retriever)
     orchestrator = AgentOrchestrator(
         perception_pipeline=pipeline,
@@ -64,6 +71,7 @@ def create_app() -> FastAPI:
         generator=generator,
         critic=critic,
         memory_committer=memory_committer,
+        session_state_store=session_state_store,
     )
 
     @app.post("/perception/analyze", response_model=PerceptionState)
@@ -117,5 +125,52 @@ def create_app() -> FastAPI:
     @app.post("/agent/run", response_model=AgentRunResponse)
     def run_agent(request: AgentRunRequest) -> AgentRunResponse:
         return orchestrator.run(request)
+
+    @app.get("/session/{session_id}", response_model=SessionStateResponse)
+    def get_session_state(session_id: str) -> SessionStateResponse:
+        return session_state_store.get(session_id)
+
+    @app.delete("/session/{session_id}", response_model=SessionStateResponse)
+    def clear_session_state(session_id: str) -> SessionStateResponse:
+        return session_state_store.clear(session_id)
+
+    @app.get("/config", response_model=ConfigResponse)
+    def get_config() -> ConfigResponse:
+        provider_name = str(getattr(generator.provider, "provider_name", generator.provider.__class__.__name__))
+        model_name = str(getattr(generator.provider, "model_name", "unknown"))
+        base_url = str(getattr(generator.provider, "base_url", ""))
+        return ConfigResponse(
+            llm_provider=provider_name,
+            llm_model=model_name,
+            ollama_base_url=base_url,
+            test_provider_override=provider_name == "mock",
+        )
+
+    @app.get("/health", response_model=HealthResponse)
+    def health() -> HealthResponse:
+        provider_name = str(getattr(generator.provider, "provider_name", generator.provider.__class__.__name__))
+        model_name = str(getattr(generator.provider, "model_name", "unknown"))
+        memory_records_available = memory_store.query(
+            MemoryQueryRequest(limit=1, include_archived=True)
+        ).evaluation.total_matches >= 0
+        ollama_reachable = provider_name != "ollama"
+
+        if provider_name == "ollama":
+            base_url = str(getattr(generator.provider, "base_url", "")).rstrip("/")
+            try:
+                req = urlrequest.Request(f"{base_url}/api/tags", method="GET")
+                with urlrequest.urlopen(req, timeout=5) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                ollama_reachable = "models" in payload
+            except (error.URLError, TimeoutError, json.JSONDecodeError):
+                ollama_reachable = False
+
+        return HealthResponse(
+            status="ok" if ollama_reachable else "degraded",
+            llm_provider=provider_name,
+            llm_model=model_name,
+            ollama_reachable=ollama_reachable,
+            memory_records_available=memory_records_available,
+        )
 
     return app
