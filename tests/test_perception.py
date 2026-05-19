@@ -109,3 +109,105 @@ def test_recent_context_model_parses():
         ),
     )
     assert turn.recent_context.active_topic == "module interfaces"
+
+
+def test_working_memory_update_endpoint_returns_state():
+    perception_response = client.post(
+        "/perception/analyze",
+        json=make_turn(
+            message_text="Can you explain the working memory manager more clearly?",
+            recent_context={
+                "recent_turn_summaries": ["We finished the Perception module."],
+                "active_topic": "working memory manager",
+                "unresolved_questions": ["What should active state contain?"],
+                "conversation_mode": "technical_collaboration",
+                "last_assistant_action": "implemented perception",
+            },
+        ),
+    )
+    assert perception_response.status_code == 200
+
+    response = client.post(
+        "/working-memory/update",
+        json={
+            "turn_input": make_turn(
+                turn_id="turn-2",
+                message_text="Can you explain the working memory manager more clearly?",
+                recent_context={
+                    "recent_turn_summaries": ["We finished the Perception module."],
+                    "active_topic": "working memory manager",
+                    "unresolved_questions": ["What should active state contain?"],
+                    "conversation_mode": "technical_collaboration",
+                    "last_assistant_action": "implemented perception",
+                },
+            ),
+            "perception_state": perception_response.json(),
+            "current_state": None,
+        },
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["state"]["active_goal"]
+    assert payload["state"]["current_subgoal"]
+    assert payload["state"]["conversation_mode"] == "technical_collaboration"
+    assert "working memory manager" in " ".join(payload["state"]["attention_targets"]).lower()
+    assert payload["evaluation"]["unresolved_questions_count"] >= 1
+
+
+def test_working_memory_carries_forward_existing_state():
+    current_state = {
+        "active_goal": "build the conversational architecture",
+        "current_subgoal": "finish the perception module",
+        "conversation_mode": "technical_collaboration",
+        "response_mode": "action_oriented",
+        "active_entities": ["Perception"],
+        "temporary_assumptions": ["The user wants continuity."],
+        "unresolved_questions": ["How should perception output be scored?"],
+        "recent_turns_compact": ["request_action: implement the perception module"],
+        "emotional_context": "stable",
+        "attention_targets": ["Perception"],
+        "suppressed_topics": [],
+        "debug_signals": {},
+    }
+
+    perception_response = client.post(
+        "/perception/analyze",
+        json=make_turn(
+            turn_id="turn-3",
+            message_text="Make it simpler.",
+            recent_context={
+                "recent_turn_summaries": ["Assistant explained the working memory manager."],
+                "active_topic": "working memory manager",
+                "unresolved_questions": [],
+                "conversation_mode": "technical_collaboration",
+                "last_assistant_action": "explained the design",
+            },
+        ),
+    )
+    assert perception_response.status_code == 200
+
+    response = client.post(
+        "/working-memory/update",
+        json={
+            "turn_input": make_turn(
+                turn_id="turn-3",
+                message_text="Make it simpler.",
+                recent_context={
+                    "recent_turn_summaries": ["Assistant explained the working memory manager."],
+                    "active_topic": "working memory manager",
+                    "unresolved_questions": [],
+                    "conversation_mode": "technical_collaboration",
+                    "last_assistant_action": "explained the design",
+                },
+            ),
+            "perception_state": perception_response.json(),
+            "current_state": current_state,
+        },
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["state"]["active_goal"]
+    assert "Perception" in payload["state"]["active_entities"]
+    assert payload["state"]["recent_turns_compact"]

@@ -124,3 +124,37 @@ class FixtureResult(BaseModel):
     passed: bool
     actual: PerceptionState
     mismatches: list[str] = Field(default_factory=list)
+
+
+class WorkingMemoryState(BaseModel):
+    active_goal: str
+    current_subgoal: str
+    conversation_mode: str
+    response_mode: str
+    active_entities: list[str] = Field(default_factory=list)
+    temporary_assumptions: list[str] = Field(default_factory=list)
+    unresolved_questions: list[str] = Field(default_factory=list)
+    recent_turns_compact: list[str] = Field(default_factory=list)
+    emotional_context: str = "stable"
+    attention_targets: list[str] = Field(default_factory=list)
+    suppressed_topics: list[str] = Field(default_factory=list)
+    debug_signals: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkingMemoryUpdateRequest(BaseModel):
+    turn_input: TurnInput
+    perception_state: PerceptionState
+    current_state: WorkingMemoryState | None = None
+
+
+class WorkingMemoryEvaluation(BaseModel):
+    active_goal_changed: bool
+    subgoal_changed: bool
+    references_carried_forward: bool
+    unresolved_questions_count: int
+    active_entities_count: int
+
+
+class WorkingMemoryUpdateResponse(BaseModel):
+    state: WorkingMemoryState
+    evaluation: WorkingMemoryEvaluation
