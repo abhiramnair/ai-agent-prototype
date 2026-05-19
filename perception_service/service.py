@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from urllib import error, request as urlrequest
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from .models import (
     AgentRunRequest,
@@ -53,6 +56,7 @@ from .working_memory import WorkingMemoryManager
 def create_app() -> FastAPI:
     logging.basicConfig(level=logging.INFO)
     app = FastAPI(title="Perception Service", version="0.1.0")
+    ui_dir = Path(__file__).resolve().parent / "ui"
     pipeline = PerceptionPipeline()
     working_memory = WorkingMemoryManager()
     dialogue_planner = DialoguePlanner()
@@ -73,6 +77,11 @@ def create_app() -> FastAPI:
         memory_committer=memory_committer,
         session_state_store=session_state_store,
     )
+    app.mount("/static", StaticFiles(directory=ui_dir / "static"), name="static")
+
+    @app.get("/", response_class=FileResponse)
+    def index() -> FileResponse:
+        return FileResponse(ui_dir / "index.html")
 
     @app.post("/perception/analyze", response_model=PerceptionState)
     def analyze_perception(turn: TurnInput) -> PerceptionState:

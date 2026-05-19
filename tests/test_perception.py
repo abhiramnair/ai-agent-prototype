@@ -30,6 +30,18 @@ def test_rejects_missing_required_fields():
     assert response.status_code == 422
 
 
+def test_chat_ui_root_page_loads():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Talk to the orchestrated agent runtime." in response.text
+
+
+def test_chat_ui_static_assets_load():
+    response = client.get("/static/app.js")
+    assert response.status_code == 200
+    assert "agent.run" not in response.text.lower() or "fetch(\"/agent/run\"" in response.text.lower()
+
+
 def test_rejects_empty_message_text():
     with pytest.raises(ValueError):
         TurnInput(

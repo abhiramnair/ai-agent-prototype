@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Agent Prototype</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">AI Agent Prototype</p>
+        <h1>Talk to the orchestrated agent runtime.</h1>
+        <p class="hero-text">
+          This UI runs the full local pipeline: perception, working memory, planning, retrieval, generation, critique, and optional memory commit.
+        </p>
+      </div>
+      <div class="status-panel">
+        <div class="status-card">
+          <span class="status-label">Provider</span>
+          <strong id="providerName">Loading...</strong>
+          <span id="modelName" class="status-subtle">Checking model</span>
+        </div>
+        <div class="status-card">
+          <span class="status-label">Runtime</span>
+          <strong id="healthStatus">Loading...</strong>
+          <span id="healthDetail" class="status-subtle">Checking local services</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <aside class="sidebar">
+        <div class="sidebar-card">
+          <span class="status-label">Session</span>
+          <code id="sessionId"></code>
+          <button id="resetSession" class="secondary-btn" type="button">New Session</button>
+        </div>
+        <div class="sidebar-card">
+          <label class="toggle-row">
+            <input id="commitMemory" type="checkbox" checked>
+            <span>Commit memory</span>
+          </label>
+          <label class="toggle-row">
+            <input id="persistMemory" type="checkbox" checked>
+            <span>Persist committed memory</span>
+          </label>
+        </div>
+        <div class="sidebar-card">
+          <span class="status-label">Last Run</span>
+          <div id="runMeta" class="meta-block">No runs yet.</div>
+        </div>
+      </aside>
+
+      <section class="chat-panel">
+        <div id="messages" class="messages"></div>
+        <form id="chatForm" class="composer">
+          <label for="messageInput" class="composer-label">Message</label>
+          <textarea id="messageInput" rows="4" placeholder="Ask the agent something technical..." required></textarea>
+          <div class="composer-actions">
+            <span id="submitState" class="status-subtle">Ready</span>
+            <button id="sendButton" class="primary-btn" type="submit">Run Agent</button>
+          </div>
+        </form>
+      </section>
+    </section>
+  </main>
+
+  <template id="messageTemplate">
+    <article class="message">
+      <header class="message-head">
+        <span class="message-role"></span>
+        <span class="message-time"></span>
+      </header>
+      <div class="message-body"></div>
+      <details class="message-details">
+        <summary>Run details</summary>
+        <pre class="details-pre"></pre>
+      </details>
+    </article>
+  </template>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
