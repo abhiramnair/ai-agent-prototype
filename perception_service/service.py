@@ -5,6 +5,8 @@ import logging
 from fastapi import FastAPI
 
 from .models import (
+    AgentRunRequest,
+    AgentRunResponse,
     CriticRequest,
     CriticResponse,
     DialoguePlanRequest,
@@ -36,6 +38,7 @@ from .generator import BaseLLMGenerator
 from .memory_committer import MemoryCommitter
 from .memory_retriever import MemoryRetriever
 from .memory_store import MemoryStore
+from .orchestrator import AgentOrchestrator
 from .pipeline import PerceptionPipeline
 from .prompt_assembler import PromptAssembler
 from .working_memory import WorkingMemoryManager
@@ -53,6 +56,15 @@ def create_app() -> FastAPI:
     memory_retriever = MemoryRetriever(memory_store)
     memory_committer = MemoryCommitter(memory_store)
     prompt_assembler = PromptAssembler(memory_retriever=memory_retriever)
+    orchestrator = AgentOrchestrator(
+        perception_pipeline=pipeline,
+        working_memory_manager=working_memory,
+        dialogue_planner=dialogue_planner,
+        prompt_assembler=prompt_assembler,
+        generator=generator,
+        critic=critic,
+        memory_committer=memory_committer,
+    )
 
     @app.post("/perception/analyze", response_model=PerceptionState)
     def analyze_perception(turn: TurnInput) -> PerceptionState:
@@ -101,5 +113,9 @@ def create_app() -> FastAPI:
     @app.post("/memory/commit", response_model=MemoryCommitResponse)
     def commit_memory(request: MemoryCommitRequest) -> MemoryCommitResponse:
         return memory_committer.commit(request)
+
+    @app.post("/agent/run", response_model=AgentRunResponse)
+    def run_agent(request: AgentRunRequest) -> AgentRunResponse:
+        return orchestrator.run(request)
 
     return app

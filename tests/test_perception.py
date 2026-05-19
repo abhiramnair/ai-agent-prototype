@@ -1,7 +1,10 @@
 from datetime import datetime
+import os
 
 from fastapi.testclient import TestClient
 import pytest
+
+os.environ["AI_AGENT_LLM_PROVIDER"] = "mock"
 
 from app import app
 from perception_service.models import RecentContext, TurnInput
@@ -1103,3 +1106,66 @@ def test_memory_decay_keeps_reinforced_strong_memories_active():
     assert matching
     assert matching[0]["archived"] is False
     assert matching[0]["strength"] >= 0.4
+
+
+def test_agent_orchestrator_runs_full_pipeline():
+    turn = make_turn(
+        turn_id="turn-orchestrator-1",
+        message_text="Let's go with deeper technical explanations and explain the orchestrator.",
+        recent_context={
+            "recent_turn_summaries": ["The long-term memory loop is now working."],
+            "active_topic": "orchestrator design",
+            "unresolved_questions": ["How do all modules run together?"],
+            "conversation_mode": "technical_collaboration",
+            "last_assistant_action": "finished memory decay",
+        },
+    )
+
+    response = client.post(
+        "/agent/run",
+        json={
+            "turn_input": turn,
+            "current_working_memory_state": None,
+            "commit_memory": True,
+            "persist_committed_memory": True,
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["perception"]["primary_intent"]
+    assert payload["working_memory"]["state"]["active_goal"]
+    assert payload["dialogue_plan"]["plan"]["response_mode"]
+    assert payload["prompt_assembly"]["prompt"]["rendered_prompt"]
+    assert payload["generation"]["output"]["response_text"]
+    assert "scores" in payload["critic"]["review"]
+    assert payload["memory_commit"] is not None
+    assert payload["evaluation"]["used_memory_commit"] is True
+
+
+def test_agent_orchestrator_supports_dry_run_without_memory_persistence():
+    turn = make_turn(
+        turn_id="turn-orchestrator-2",
+        message_text="That is wrong, correct the orchestrator assumption.",
+        recent_context={
+            "recent_turn_summaries": ["The orchestrator made a bad assumption."],
+            "active_topic": "orchestrator correction",
+            "unresolved_questions": [],
+            "conversation_mode": "technical_collaboration",
+            "last_assistant_action": "returned a draft answer",
+        },
+    )
+
+    response = client.post(
+        "/agent/run",
+        json={
+            "turn_input": turn,
+            "current_working_memory_state": None,
+            "commit_memory": True,
+            "persist_committed_memory": False,
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["memory_commit"] is not None
+    assert payload["memory_commit"]["committed_memories"] == []
+    assert payload["evaluation"]["used_memory_commit"] is True

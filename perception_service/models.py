@@ -460,3 +460,28 @@ class MemoryCommitResponse(BaseModel):
     candidates: list[MemoryCandidate] = Field(default_factory=list)
     committed_memories: list[MemoryRecord] = Field(default_factory=list)
     evaluation: MemoryCommitEvaluation
+
+
+class AgentRunRequest(BaseModel):
+    turn_input: TurnInput
+    current_working_memory_state: WorkingMemoryState | None = None
+    commit_memory: bool = True
+    persist_committed_memory: bool = True
+
+
+class AgentRunEvaluation(BaseModel):
+    used_memory_commit: bool
+    critic_requires_revision: bool
+    used_retrieved_memories: bool
+    provider_name: str
+
+
+class AgentRunResponse(BaseModel):
+    perception: PerceptionState
+    working_memory: WorkingMemoryUpdateResponse
+    dialogue_plan: DialoguePlanResponse
+    prompt_assembly: PromptAssemblyResponse
+    generation: GenerationResponse
+    critic: CriticResponse
+    memory_commit: MemoryCommitResponse | None = None
+    evaluation: AgentRunEvaluation
