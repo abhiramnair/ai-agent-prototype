@@ -5,11 +5,14 @@ import logging
 from fastapi import FastAPI
 
 from .models import (
+    DialoguePlanRequest,
+    DialoguePlanResponse,
     PerceptionState,
     TurnInput,
     WorkingMemoryUpdateRequest,
     WorkingMemoryUpdateResponse,
 )
+from .dialogue_planner import DialoguePlanner
 from .pipeline import PerceptionPipeline
 from .working_memory import WorkingMemoryManager
 
@@ -19,6 +22,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Perception Service", version="0.1.0")
     pipeline = PerceptionPipeline()
     working_memory = WorkingMemoryManager()
+    dialogue_planner = DialoguePlanner()
 
     @app.post("/perception/analyze", response_model=PerceptionState)
     def analyze_perception(turn: TurnInput) -> PerceptionState:
@@ -27,5 +31,9 @@ def create_app() -> FastAPI:
     @app.post("/working-memory/update", response_model=WorkingMemoryUpdateResponse)
     def update_working_memory(request: WorkingMemoryUpdateRequest) -> WorkingMemoryUpdateResponse:
         return working_memory.update(request)
+
+    @app.post("/dialogue-planner/plan", response_model=DialoguePlanResponse)
+    def create_dialogue_plan(request: DialoguePlanRequest) -> DialoguePlanResponse:
+        return dialogue_planner.create_plan(request)
 
     return app

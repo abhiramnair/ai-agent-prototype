@@ -211,3 +211,80 @@ def test_working_memory_carries_forward_existing_state():
     assert payload["state"]["active_goal"]
     assert "Perception" in payload["state"]["active_entities"]
     assert payload["state"]["recent_turns_compact"]
+
+
+def test_dialogue_planner_returns_structured_plan():
+    turn = make_turn(
+        turn_id="turn-4",
+        message_text="Can you explain the dialogue planner with examples?",
+        recent_context={
+            "recent_turn_summaries": ["Working memory manager is now implemented."],
+            "active_topic": "dialogue planner",
+            "unresolved_questions": ["How should it choose response strategy?"],
+            "conversation_mode": "technical_collaboration",
+            "last_assistant_action": "implemented working memory",
+        },
+    )
+    perception_response = client.post("/perception/analyze", json=turn)
+    assert perception_response.status_code == 200
+
+    working_memory_response = client.post(
+        "/working-memory/update",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "current_state": None,
+        },
+    )
+    assert working_memory_response.status_code == 200
+
+    response = client.post(
+        "/dialogue-planner/plan",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+        },
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["plan"]["response_mode"] == "structured_explanation"
+    assert payload["plan"]["detail_level"] == "high"
+    assert payload["plan"]["draft_constraints"]["prefer_examples"] is True
+    assert payload["evaluation"]["plan_has_required_fields"] is True
+
+
+def test_dialogue_planner_handles_ambiguous_turns():
+    turn = make_turn(
+        turn_id="turn-5",
+        message_text="This?",
+    )
+    perception_response = client.post("/perception/analyze", json=turn)
+    assert perception_response.status_code == 200
+
+    working_memory_response = client.post(
+        "/working-memory/update",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "current_state": None,
+        },
+    )
+    assert working_memory_response.status_code == 200
+
+    response = client.post(
+        "/dialogue-planner/plan",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["plan"]["clarification_policy"] in {
+        "ask_one_targeted_question",
+        "answer_with_assumption_if_safe",
+    }
+    assert payload["plan"]["draft_constraints"]["require_explicit_uncertainty"] is True

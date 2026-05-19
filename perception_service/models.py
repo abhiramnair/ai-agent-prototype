@@ -158,3 +158,44 @@ class WorkingMemoryEvaluation(BaseModel):
 class WorkingMemoryUpdateResponse(BaseModel):
     state: WorkingMemoryState
     evaluation: WorkingMemoryEvaluation
+
+
+class DraftConstraints(BaseModel):
+    avoid_repetition: bool = True
+    avoid_overclaiming: bool = True
+    avoid_scope_drift: bool = True
+    prefer_examples: bool = False
+    require_explicit_uncertainty: bool = False
+
+
+class DialoguePlan(BaseModel):
+    response_mode: str
+    primary_goal: str
+    secondary_goal: str
+    reasoning_style: str
+    tone: str
+    detail_level: str
+    clarification_policy: str
+    memory_use_policy: str
+    must_include: list[str] = Field(default_factory=list)
+    must_avoid: list[str] = Field(default_factory=list)
+    draft_constraints: DraftConstraints = Field(default_factory=DraftConstraints)
+    debug_signals: dict[str, Any] = Field(default_factory=dict)
+
+
+class DialoguePlanRequest(BaseModel):
+    turn_input: TurnInput
+    perception_state: PerceptionState
+    working_memory_state: WorkingMemoryState
+
+
+class DialoguePlanEvaluation(BaseModel):
+    used_recent_context: bool
+    asks_for_clarification: bool
+    ambiguity_sensitive: bool
+    plan_has_required_fields: bool
+
+
+class DialoguePlanResponse(BaseModel):
+    plan: DialoguePlan
+    evaluation: DialoguePlanEvaluation
