@@ -396,3 +396,41 @@ class MemoryRetrievalEvaluation(BaseModel):
 class MemoryRetrievalResponse(BaseModel):
     memories: list[RetrievedMemory] = Field(default_factory=list)
     evaluation: MemoryRetrievalEvaluation
+
+
+class MemoryCandidate(BaseModel):
+    candidate_id: str
+    candidate_type: str
+    content: str
+    source_turn_id: str
+    key: str
+    novelty_score: float = Field(ge=0.0, le=1.0)
+    importance_score: float = Field(ge=0.0, le=1.0)
+    repeat_score: float = Field(ge=0.0, le=1.0)
+    trust_score: float = Field(ge=0.0, le=1.0)
+    future_utility_score: float = Field(ge=0.0, le=1.0)
+    explicit_user_signal: bool = False
+    commit_decision: str
+    rationale: str
+    tags: list[str] = Field(default_factory=list)
+
+
+class MemoryCommitRequest(BaseModel):
+    turn_input: TurnInput
+    perception_state: PerceptionState
+    working_memory_state: WorkingMemoryState
+    critic_review: CriticReview | None = None
+    persist_committed: bool = True
+
+
+class MemoryCommitEvaluation(BaseModel):
+    candidate_count: int = Field(ge=0)
+    committed_count: int = Field(ge=0)
+    discarded_count: int = Field(ge=0)
+    persistence_enabled: bool
+
+
+class MemoryCommitResponse(BaseModel):
+    candidates: list[MemoryCandidate] = Field(default_factory=list)
+    committed_memories: list[MemoryRecord] = Field(default_factory=list)
+    evaluation: MemoryCommitEvaluation

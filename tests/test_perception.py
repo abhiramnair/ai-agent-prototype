@@ -811,3 +811,98 @@ def test_memory_retriever_respects_archived_filtering():
     )
     assert visible.status_code == 200
     assert visible.json()["memories"]
+
+
+def test_memory_committer_persists_explicit_preference_and_commitment():
+    turn = make_turn(
+        turn_id="turn-commit-1",
+        message_text="Let's go with deeper technical explanations from now on.",
+        recent_context={
+            "recent_turn_summaries": ["We completed the first conversational loop."],
+            "active_topic": "response style",
+            "unresolved_questions": [],
+            "conversation_mode": "technical_collaboration",
+            "last_assistant_action": "summarized the current architecture",
+        },
+    )
+    perception_response = client.post("/perception/analyze", json=turn)
+    assert perception_response.status_code == 200
+
+    working_memory_response = client.post(
+        "/working-memory/update",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "current_state": None,
+        },
+    )
+    assert working_memory_response.status_code == 200
+
+    response = client.post(
+        "/memory/commit",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+            "critic_review": None,
+            "persist_committed": True,
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["evaluation"]["candidate_count"] >= 1
+    assert payload["evaluation"]["committed_count"] >= 1
+    assert payload["committed_memories"]
+
+    retrieved = client.post(
+        "/memory/retrieve",
+        json={
+            "query_text": "deeper technical explanations",
+            "memory_types": ["preference", "procedural"],
+            "limit": 5,
+        },
+    )
+    assert retrieved.status_code == 200
+    assert retrieved.json()["memories"]
+
+
+def test_memory_committer_can_dry_run_without_persisting():
+    turn = make_turn(
+        turn_id="turn-commit-2",
+        message_text="That is wrong, correct this assumption.",
+        recent_context={
+            "recent_turn_summaries": ["The assistant made an incorrect assumption."],
+            "active_topic": "assumption correction",
+            "unresolved_questions": [],
+            "conversation_mode": "technical_collaboration",
+            "last_assistant_action": "made a draft recommendation",
+        },
+    )
+    perception_response = client.post("/perception/analyze", json=turn)
+    assert perception_response.status_code == 200
+
+    working_memory_response = client.post(
+        "/working-memory/update",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "current_state": None,
+        },
+    )
+    assert working_memory_response.status_code == 200
+
+    response = client.post(
+        "/memory/commit",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+            "critic_review": None,
+            "persist_committed": False,
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["evaluation"]["candidate_count"] >= 1
+    assert payload["evaluation"]["persistence_enabled"] is False
+    assert payload["committed_memories"] == []
