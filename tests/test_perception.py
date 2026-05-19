@@ -385,3 +385,108 @@ def test_prompt_assembler_includes_uncertainty_guidance_when_needed():
     payload = response.json()
     assert response.status_code == 200
     assert payload["evaluation"]["includes_uncertainty_guidance"] is True
+
+
+def test_generator_returns_response_from_assembled_prompt():
+    turn = make_turn(
+        turn_id="turn-8",
+        message_text="Can you explain how the base LLM generator should work?",
+        recent_context={
+            "recent_turn_summaries": ["Prompt assembler was just added."],
+            "active_topic": "base llm generator",
+            "unresolved_questions": ["How do we swap providers later?"],
+            "conversation_mode": "technical_collaboration",
+            "last_assistant_action": "implemented prompt assembly",
+        },
+    )
+    perception_response = client.post("/perception/analyze", json=turn)
+    assert perception_response.status_code == 200
+
+    working_memory_response = client.post(
+        "/working-memory/update",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "current_state": None,
+        },
+    )
+    assert working_memory_response.status_code == 200
+
+    planner_response = client.post(
+        "/dialogue-planner/plan",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+        },
+    )
+    assert planner_response.status_code == 200
+
+    prompt_response = client.post(
+        "/prompt-assembler/assemble",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+            "dialogue_plan": planner_response.json()["plan"],
+        },
+    )
+    assert prompt_response.status_code == 200
+
+    response = client.post(
+        "/generator/generate",
+        json={"prompt": prompt_response.json()["prompt"]},
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["output"]["response_text"]
+    assert payload["output"]["metadata"]["provider_name"] == "mock"
+    assert payload["evaluation"]["response_nonempty"] is True
+
+
+def test_generator_marks_uncertainty_guidance_for_ambiguous_prompt():
+    turn = make_turn(
+        turn_id="turn-9",
+        message_text="This?",
+    )
+    perception_response = client.post("/perception/analyze", json=turn)
+    assert perception_response.status_code == 200
+
+    working_memory_response = client.post(
+        "/working-memory/update",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "current_state": None,
+        },
+    )
+    assert working_memory_response.status_code == 200
+
+    planner_response = client.post(
+        "/dialogue-planner/plan",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+        },
+    )
+    assert planner_response.status_code == 200
+
+    prompt_response = client.post(
+        "/prompt-assembler/assemble",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+            "dialogue_plan": planner_response.json()["plan"],
+        },
+    )
+    assert prompt_response.status_code == 200
+
+    response = client.post(
+        "/generator/generate",
+        json={"prompt": prompt_response.json()["prompt"]},
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["evaluation"]["follows_uncertainty_guidance"] is True

@@ -232,3 +232,33 @@ class PromptAssemblyEvaluation(BaseModel):
 class PromptAssemblyResponse(BaseModel):
     prompt: PromptAssembly
     evaluation: PromptAssemblyEvaluation
+
+
+class GenerationMetadata(BaseModel):
+    provider_name: str
+    model_name: str
+    finish_reason: str
+    latency_ms: float = Field(ge=0.0)
+    token_usage: dict[str, int] = Field(default_factory=dict)
+
+
+class GeneratorOutput(BaseModel):
+    response_text: str
+    response_mode: str
+    metadata: GenerationMetadata
+    debug_signals: dict[str, Any] = Field(default_factory=dict)
+
+
+class GenerationRequest(BaseModel):
+    prompt: PromptAssembly
+
+
+class GenerationEvaluation(BaseModel):
+    response_nonempty: bool
+    includes_goal_alignment: bool
+    follows_uncertainty_guidance: bool
+
+
+class GenerationResponse(BaseModel):
+    output: GeneratorOutput
+    evaluation: GenerationEvaluation

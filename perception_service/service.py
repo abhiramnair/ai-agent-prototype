@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from .models import (
     DialoguePlanRequest,
     DialoguePlanResponse,
+    GenerationRequest,
+    GenerationResponse,
     PerceptionState,
     PromptAssemblyRequest,
     PromptAssemblyResponse,
@@ -15,6 +17,7 @@ from .models import (
     WorkingMemoryUpdateResponse,
 )
 from .dialogue_planner import DialoguePlanner
+from .generator import BaseLLMGenerator
 from .pipeline import PerceptionPipeline
 from .prompt_assembler import PromptAssembler
 from .working_memory import WorkingMemoryManager
@@ -27,6 +30,7 @@ def create_app() -> FastAPI:
     working_memory = WorkingMemoryManager()
     dialogue_planner = DialoguePlanner()
     prompt_assembler = PromptAssembler()
+    generator = BaseLLMGenerator()
 
     @app.post("/perception/analyze", response_model=PerceptionState)
     def analyze_perception(turn: TurnInput) -> PerceptionState:
@@ -43,5 +47,9 @@ def create_app() -> FastAPI:
     @app.post("/prompt-assembler/assemble", response_model=PromptAssemblyResponse)
     def assemble_prompt(request: PromptAssemblyRequest) -> PromptAssemblyResponse:
         return prompt_assembler.assemble_prompt(request)
+
+    @app.post("/generator/generate", response_model=GenerationResponse)
+    def generate_response(request: GenerationRequest) -> GenerationResponse:
+        return generator.generate(request)
 
     return app
