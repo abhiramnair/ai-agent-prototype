@@ -364,3 +364,35 @@ class MemoryArchiveRequest(BaseModel):
 class MemoryArchiveResponse(BaseModel):
     memory: MemoryRecord
     archived: bool
+
+
+class RetrievedMemory(BaseModel):
+    memory_id: str
+    memory_type: str
+    key: str
+    value: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    retrieval_score: float = Field(ge=0.0, le=1.0)
+    tags: list[str] = Field(default_factory=list)
+    source_turn_id: str | None = None
+    retrieval_reason: str
+
+
+class MemoryRetrievalRequest(BaseModel):
+    query_text: str
+    memory_types: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    limit: int = Field(default=5, ge=1, le=20)
+    include_archived: bool = False
+
+
+class MemoryRetrievalEvaluation(BaseModel):
+    retrieved_count: int = Field(ge=0)
+    used_type_filters: bool
+    used_tag_filters: bool
+    top_score: float = Field(ge=0.0, le=1.0)
+
+
+class MemoryRetrievalResponse(BaseModel):
+    memories: list[RetrievedMemory] = Field(default_factory=list)
+    evaluation: MemoryRetrievalEvaluation

@@ -728,3 +728,86 @@ def test_memory_store_archive_hides_records_by_default():
     )
     assert visible_query.status_code == 200
     assert visible_query.json()["memories"]
+
+
+def test_memory_retriever_returns_ranked_prompt_ready_memories():
+    client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "preference",
+            "key": "answer_style.depth",
+            "value": "deep architectural discussion",
+            "confidence": 0.91,
+            "source_turn_id": "turn-retrieve-1",
+            "tags": ["preferences", "style"],
+            "evidence": ["User asked to go deeper several times."],
+        },
+    )
+    client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "procedural",
+            "key": "planning.sequence",
+            "value": "build memory store before memory retriever",
+            "confidence": 0.82,
+            "source_turn_id": "turn-retrieve-2",
+            "tags": ["planning", "memory"],
+            "evidence": ["Module order was agreed in the conversation."],
+        },
+    )
+
+    response = client.post(
+        "/memory/retrieve",
+        json={
+            "query_text": "deep architectural discussion",
+            "memory_types": ["preference", "procedural"],
+            "tags": ["preferences"],
+            "limit": 3,
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["memories"]
+    assert payload["memories"][0]["memory_type"] == "preference"
+    assert payload["memories"][0]["retrieval_score"] >= 0.0
+    assert payload["evaluation"]["used_type_filters"] is True
+
+
+def test_memory_retriever_respects_archived_filtering():
+    create_response = client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "episodic",
+            "key": "retrieval.hidden.case",
+            "value": "This archived memory should not appear by default.",
+            "confidence": 0.77,
+            "source_turn_id": "turn-retrieve-archive",
+            "tags": ["hidden"],
+            "evidence": ["Archive filtering test."],
+        },
+    )
+    memory_id = create_response.json()["memory"]["memory_id"]
+    client.post("/memory/archive", json={"memory_id": memory_id})
+
+    hidden = client.post(
+        "/memory/retrieve",
+        json={
+            "query_text": "archived memory",
+            "memory_types": ["episodic"],
+            "limit": 5,
+        },
+    )
+    assert hidden.status_code == 200
+    assert hidden.json()["memories"] == []
+
+    visible = client.post(
+        "/memory/retrieve",
+        json={
+            "query_text": "archived memory",
+            "memory_types": ["episodic"],
+            "include_archived": True,
+            "limit": 5,
+        },
+    )
+    assert visible.status_code == 200
+    assert visible.json()["memories"]
