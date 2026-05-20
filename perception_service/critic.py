@@ -38,11 +38,13 @@ class DefaultCriticHook(CriticHook):
         matched_required = sum(1 for item in must_include if item and item in response_lower)
         violated_avoid = [item for item in must_avoid if item and item in response_lower]
 
+        base_relevance = 0.65 if not must_include else 0.45
+        base_faithfulness = 0.68 if not must_include else 0.4
         relevance = min(
             1.0,
-            0.45 + 0.18 * matched_required + (0.12 if request.prompt.current_subgoal.lower() in response_lower else 0.0),
+            base_relevance + 0.18 * matched_required + (0.12 if request.prompt.current_subgoal.lower() in response_lower else 0.0),
         )
-        faithfulness = min(1.0, 0.4 + 0.2 * matched_required)
+        faithfulness = min(1.0, base_faithfulness + 0.2 * matched_required)
         clarity = 0.88 if len(response_text.split()) >= 8 else 0.62
         tone_fit = 0.9 if expected_tone in {"clear_direct", "collaborative_technical", "warm_clear"} else 0.76
         hallucination_risk = 0.12
@@ -83,6 +85,20 @@ class DefaultCriticHook(CriticHook):
             faithfulness = max(0.0, faithfulness - 0.12)
             clarity = max(0.0, clarity - 0.08)
 
+        if self._looks_like_meta_reasoning(response_lower):
+            findings.append(
+                CriticFinding(
+                    severity="high",
+                    category="meta_reasoning",
+                    message="The draft exposes internal reasoning or planning language instead of a direct user-facing answer.",
+                )
+            )
+            recommended_edits.append("Rewrite the draft to remove internal reasoning and return only the final answer.")
+            relevance = max(0.0, relevance - 0.25)
+            clarity = max(0.0, clarity - 0.2)
+            faithfulness = max(0.0, faithfulness - 0.2)
+            hallucination_risk = min(1.0, hallucination_risk + 0.1)
+
         if len(response_text.split()) < 6:
             findings.append(
                 CriticFinding(
@@ -111,6 +127,22 @@ class DefaultCriticHook(CriticHook):
                 "required_count": len(must_include),
                 "violated_avoid_count": len(violated_avoid),
             },
+        )
+
+    def _looks_like_meta_reasoning(self, response_lower: str) -> bool:
+        markers = (
+            "the user asked",
+            "the user said",
+            "i need to respond",
+            "i need to",
+            "let me think",
+            "the policy says",
+            "this turn looks like",
+            "i'm focusing on",
+        )
+        head = " ".join(response_lower.split())[:220]
+        return head.startswith(("okay, the user", "the user", "i need to", "let me think")) or any(
+            marker in head for marker in markers
         )
 
 

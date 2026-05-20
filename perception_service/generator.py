@@ -19,10 +19,38 @@ from .models import (
 logger = logging.getLogger("generator_service")
 
 
+def looks_like_meta_reasoning(text: str) -> bool:
+    normalized = " ".join(text.strip().lower().split())
+    if not normalized:
+        return False
+    leakage_markers = (
+        "the user asked",
+        "the user said",
+        "i need to respond",
+        "i need to",
+        "let me think",
+        "the policy says",
+        "this turn looks like",
+        "i should",
+        "i'm focusing on",
+        "we are given",
+        "draft to rewrite",
+        "target tone",
+        "target length",
+        "rewrite the draft",
+    )
+    return normalized.startswith(("okay, the user", "the user", "i need to", "let me think", "we are given")) or any(
+        marker in normalized[:260] for marker in leakage_markers
+    )
+
+
 class LLMProvider(ABC):
     @abstractmethod
     def generate(self, prompt: PromptAssembly) -> GeneratorOutput:
         raise NotImplementedError
+
+    def rewrite_to_final(self, prompt: PromptAssembly, draft: str) -> GeneratorOutput | None:
+        return None
 
 
 class MockLLMProvider(LLMProvider):
@@ -142,22 +170,7 @@ class OllamaProvider(LLMProvider):
                 "temperature": self.temperature,
             },
         }
-        payload = json.dumps(body).encode("utf-8")
-        req = request.Request(
-            url=f"{self.base_url}/api/chat",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with request.urlopen(req, timeout=self.timeout_seconds) as response:
-                raw = response.read().decode("utf-8")
-        except error.URLError as exc:
-            raise RuntimeError(f"Unable to reach Ollama at {self.base_url}: {exc}") from exc
-
-        data = json.loads(raw)
-        message = data.get("message", {}) or {}
-        response_text = str(message.get("content", "")).strip()
+        data, response_text = self._chat(body)
         latency_ms = (time.perf_counter() - started) * 1000.0
         return GeneratorOutput(
             response_text=response_text,
@@ -182,6 +195,143 @@ class OllamaProvider(LLMProvider):
                 "lightweight_prompt": lightweight,
             },
         )
+
+    def rewrite_to_final(self, prompt: PromptAssembly, draft: str) -> GeneratorOutput | None:
+        started = time.perf_counter()
+        response_policy = prompt.response_plan.get("response_policy", {})
+        target_length = str(response_policy.get("target_length", prompt.response_plan.get("detail_level", "medium")))
+        final_answer_schema = {
+            "type": "object",
+            "properties": {
+                "final_answer": {
+                    "type": "string",
+                }
+            },
+            "required": ["final_answer"],
+        }
+        rewrite_body = {
+            "model": self.model_name,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "Rewrite the draft into the final assistant reply only. "
+                        "Do not mention analysis, reasoning, policy, planning, context, or the user prompt. "
+                        "Do not say things like 'I need to', 'the user asked', 'let me think', or 'the policy says'. "
+                        "Keep the meaning, but output only the final user-facing answer."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Original user message:\n{prompt.current_user_message.strip()}\n\n"
+                        f"Target tone/length:\n{response_policy}\n\n"
+                        f"Draft to rewrite:\n{draft}"
+                    ),
+                },
+            ],
+            "stream": False,
+            "think": False,
+            "keep_alive": self.keep_alive,
+            "format": final_answer_schema,
+            "options": {
+                "num_predict": 48 if target_length == "short" else 96,
+                "num_ctx": min(self.num_ctx, 4096),
+                "temperature": 0.2,
+            },
+        }
+        try:
+            data, response_text = self._chat(rewrite_body)
+        except error.URLError as exc:
+            logger.warning("ollama_rewrite_failed", extra={"error": str(exc)})
+            return None
+
+        response_text = self._extract_final_answer(response_text)
+        second_pass_used = False
+        if looks_like_meta_reasoning(response_text):
+            second_pass_used = True
+            retry_body = {
+                "model": self.model_name,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Reply to the user's message with only the final assistant answer. "
+                            "Keep it natural and concise. "
+                            "Do not mention analysis, reasoning, instructions, the user prompt, or any rewrite task."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt.current_user_message.strip(),
+                    },
+                ],
+                "stream": False,
+                "think": False,
+                "keep_alive": self.keep_alive,
+                "format": final_answer_schema,
+                "options": {
+                    "num_predict": 32 if target_length == "short" else 80,
+                    "num_ctx": min(self.num_ctx, 2048),
+                    "temperature": 0.2,
+                },
+            }
+            try:
+                data, response_text = self._chat(retry_body)
+            except error.URLError as exc:
+                logger.warning("ollama_rewrite_retry_failed", extra={"error": str(exc)})
+                return None
+            response_text = self._extract_final_answer(response_text)
+
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        return GeneratorOutput(
+            response_text=response_text,
+            response_mode=str(prompt.response_plan.get("response_mode", "direct_response")),
+            metadata=GenerationMetadata(
+                provider_name=self.provider_name,
+                model_name=self.model_name,
+                finish_reason="rewritten_final",
+                latency_ms=round(latency_ms, 2),
+                token_usage={
+                    "prompt_eval_count": int(data.get("prompt_eval_count", 0) or 0),
+                    "eval_count": int(data.get("eval_count", 0) or 0),
+                },
+            ),
+            debug_signals={
+                "used_ollama_provider": True,
+                "rewrite_pass": True,
+                "rewrite_second_pass": second_pass_used,
+                "target_length": target_length,
+            },
+        )
+
+    def _chat(self, body: dict[str, object]) -> tuple[dict[str, object], str]:
+        payload = json.dumps(body).encode("utf-8")
+        req = request.Request(
+            url=f"{self.base_url}/api/chat",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with request.urlopen(req, timeout=self.timeout_seconds) as response:
+                raw = response.read().decode("utf-8")
+        except error.URLError:
+            raise
+        data = json.loads(raw)
+        message = data.get("message", {}) or {}
+        return data, str(message.get("content", "")).strip()
+
+    def _extract_final_answer(self, response_text: str) -> str:
+        try:
+            payload = json.loads(response_text)
+        except json.JSONDecodeError:
+            return response_text.strip()
+        if isinstance(payload, dict):
+            answer = payload.get("final_answer")
+            if isinstance(answer, str):
+                return answer.strip()
+        return response_text.strip()
 
     def _build_system_message(self, prompt: PromptAssembly, *, lightweight: bool) -> str:
         if lightweight:
@@ -282,6 +432,7 @@ class BaseLLMGenerator:
 
     def generate(self, request: GenerationRequest) -> GenerationResponse:
         output = self._generate_with_fallback(request.prompt)
+        output = self._repair_runtime_output(request.prompt, output)
         evaluation = GenerationEvaluation(
             response_nonempty=bool(output.response_text.strip()),
             includes_goal_alignment=request.prompt.current_subgoal.lower() in output.response_text.lower(),
@@ -301,6 +452,34 @@ class BaseLLMGenerator:
             },
         )
         return GenerationResponse(output=output, evaluation=evaluation)
+
+    def _repair_runtime_output(self, prompt: PromptAssembly, output: GeneratorOutput) -> GeneratorOutput:
+        if not looks_like_meta_reasoning(output.response_text):
+            return output
+
+        repaired_output: GeneratorOutput | None = None
+        if hasattr(self.provider, "rewrite_to_final"):
+            repaired_output = self.provider.rewrite_to_final(prompt, output.response_text)
+
+        if repaired_output and repaired_output.response_text.strip() and not looks_like_meta_reasoning(
+            repaired_output.response_text
+        ):
+            repaired_output.debug_signals.update(
+                {
+                    "runtime_repair_applied": True,
+                    "runtime_repair_reason": "meta_reasoning_detected",
+                    "original_finish_reason": output.metadata.finish_reason,
+                }
+            )
+            return repaired_output
+
+        output.debug_signals.update(
+            {
+                "runtime_repair_attempted": repaired_output is not None,
+                "runtime_repair_reason": "meta_reasoning_detected",
+            }
+        )
+        return output
 
     def _generate_with_fallback(self, prompt: PromptAssembly) -> GeneratorOutput:
         try:

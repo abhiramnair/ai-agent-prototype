@@ -7,7 +7,15 @@ import pytest
 os.environ["AI_AGENT_LLM_PROVIDER"] = "mock"
 
 from app import app
-from perception_service.models import RecentContext, TurnInput
+from perception_service.generator import BaseLLMGenerator, LLMProvider
+from perception_service.models import (
+    GenerationMetadata,
+    GenerationRequest,
+    GeneratorOutput,
+    PromptAssembly,
+    RecentContext,
+    TurnInput,
+)
 
 
 client = TestClient(app)
@@ -508,6 +516,74 @@ def test_generator_marks_uncertainty_guidance_for_ambiguous_prompt():
     payload = response.json()
     assert response.status_code == 200
     assert payload["evaluation"]["follows_uncertainty_guidance"] is True
+
+
+def test_generator_repairs_meta_reasoning_output():
+    class LeakyProvider(LLMProvider):
+        def generate(self, prompt: PromptAssembly) -> GeneratorOutput:
+            return GeneratorOutput(
+                response_text='Okay, the user asked "how are you". I need to respond naturally.',
+                response_mode="social_reply",
+                metadata=GenerationMetadata(
+                    provider_name="test-provider",
+                    model_name="test-model",
+                    finish_reason="completed",
+                    latency_ms=1.0,
+                    token_usage={},
+                ),
+                debug_signals={},
+            )
+
+        def rewrite_to_final(self, prompt: PromptAssembly, draft: str) -> GeneratorOutput | None:
+            return GeneratorOutput(
+                response_text="I'm doing well, thanks for asking. How are you?",
+                response_mode="social_reply",
+                metadata=GenerationMetadata(
+                    provider_name="test-provider",
+                    model_name="test-model",
+                    finish_reason="rewritten_final",
+                    latency_ms=1.0,
+                    token_usage={},
+                ),
+                debug_signals={},
+            )
+
+    prompt = PromptAssembly(
+        system_role="You are the conversation generator in a modular cognitive system.",
+        current_user_message="how are you",
+        active_goal="continue the conversation",
+        current_subgoal="reply naturally to the user",
+        relevant_recent_context=[],
+        retrieved_memories=[],
+        working_memory_snapshot={},
+        perception_summary={},
+        response_plan={
+            "response_mode": "social_reply",
+            "detail_level": "low",
+            "draft_constraints": {"require_explicit_uncertainty": False},
+            "response_policy": {
+                "interaction_type": "social_exchange",
+                "reasoning_effort": "minimal",
+                "target_length": "short",
+                "tone_policy": "warm",
+                "retrieval_policy": "minimal_retrieval",
+                "example_policy": "examples_optional",
+                "confidence_policy": "answer_directly",
+                "adaptation_hints": [],
+                "learning_objective": "Learn what social responses work best.",
+            },
+        },
+        instructions=[],
+        rendered_prompt="test prompt",
+        debug_signals={},
+    )
+
+    generator = BaseLLMGenerator(provider=LeakyProvider())
+    response = generator.generate(GenerationRequest(prompt=prompt))
+
+    assert response.output.response_text == "I'm doing well, thanks for asking. How are you?"
+    assert response.output.metadata.finish_reason == "rewritten_final"
+    assert response.output.debug_signals["runtime_repair_applied"] is True
 
 
 def test_generator_uses_adaptive_policy_for_simple_social_turn():
