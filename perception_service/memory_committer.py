@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
 import logging
 from uuid import uuid4
 
@@ -155,19 +156,23 @@ class MemoryCommitter:
                 self._make_candidate(
                     candidate_type="procedural",
                     key=f"response_policy.{self._slugify(policy.interaction_type)}",
-                    content=(
-                        f"interaction_type={policy.interaction_type}; "
-                        f"reasoning_effort={policy.reasoning_effort}; "
-                        f"target_length={policy.target_length}; "
-                        f"tone_policy={policy.tone_policy}; "
-                        f"confidence_policy={policy.confidence_policy}"
+                    content=json.dumps(
+                        {
+                            "interaction_type": policy.interaction_type,
+                            "reasoning_effort": policy.reasoning_effort,
+                            "target_length": policy.target_length,
+                            "tone_policy": policy.tone_policy,
+                            "retrieval_policy": policy.retrieval_policy,
+                            "example_policy": policy.example_policy,
+                            "confidence_policy": policy.confidence_policy,
+                        }
                     ),
                     source_turn_id=turn.turn_id,
-                    novelty_score=0.41,
-                    importance_score=0.64,
-                    repeat_score=0.52,
-                    trust_score=0.79,
-                    future_utility_score=0.77,
+                    novelty_score=0.48,
+                    importance_score=0.82,
+                    repeat_score=0.72,
+                    trust_score=0.84,
+                    future_utility_score=0.86,
                     explicit_user_signal=False,
                     tags=["procedural", "response_policy", policy.interaction_type],
                     rationale="Successful turn recorded so future similar turns can reuse the response policy that worked.",

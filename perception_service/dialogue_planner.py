@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+import json
 import logging
 
+from .memory_retriever import MemoryRetriever
 from .models import (
     AdaptiveResponsePolicy,
     DialoguePlan,
@@ -10,7 +12,9 @@ from .models import (
     DialoguePlanRequest,
     DialoguePlanResponse,
     DraftConstraints,
+    MemoryRetrievalRequest,
     PerceptionState,
+    RetrievedMemory,
     TurnInput,
     WorkingMemoryState,
 )
@@ -25,6 +29,7 @@ class DialoguePlannerHook(ABC):
         turn: TurnInput,
         perception: PerceptionState,
         working_memory: WorkingMemoryState,
+        retrieved_memories: list[RetrievedMemory],
     ) -> DialoguePlan:
         raise NotImplementedError
 
@@ -35,6 +40,7 @@ class DefaultDialoguePlannerHook(DialoguePlannerHook):
         turn: TurnInput,
         perception: PerceptionState,
         working_memory: WorkingMemoryState,
+        retrieved_memories: list[RetrievedMemory],
     ) -> DialoguePlan:
         response_mode = self._derive_response_mode(perception, working_memory)
         reasoning_style = self._derive_reasoning_style(perception, working_memory)
@@ -46,6 +52,11 @@ class DefaultDialoguePlannerHook(DialoguePlannerHook):
         must_avoid = self._derive_must_avoid(perception, working_memory)
         constraints = self._derive_constraints(perception, response_mode)
         response_policy = self._derive_response_policy(perception, working_memory, response_mode, detail_level)
+        policy_source = "derived"
+        learned_policy = self._find_learned_response_policy(retrieved_memories, response_policy.interaction_type)
+        if learned_policy is not None:
+            response_policy = self._merge_learned_policy(response_policy, learned_policy)
+            policy_source = "memory_reuse"
 
         return DialoguePlan(
             response_mode=response_mode,
@@ -66,6 +77,8 @@ class DefaultDialoguePlannerHook(DialoguePlannerHook):
                 "active_entities_count": len(working_memory.active_entities),
                 "interaction_type": response_policy.interaction_type,
                 "reasoning_effort": response_policy.reasoning_effort,
+                "policy_source": policy_source,
+                "retrieved_policy_count": len(retrieved_memories),
             },
         )
 
@@ -276,6 +289,48 @@ class DefaultDialoguePlannerHook(DialoguePlannerHook):
             f"{reasoning_effort} reasoning effort and {target_length} responses."
         )
 
+    def _find_learned_response_policy(
+        self,
+        retrieved_memories: list[RetrievedMemory],
+        interaction_type: str,
+    ) -> dict[str, object] | None:
+        for memory in retrieved_memories:
+            if "response_policy" not in memory.key:
+                continue
+            payload = self._parse_policy_memory(memory.value)
+            if not payload:
+                continue
+            if str(payload.get("interaction_type", "")).strip() != interaction_type:
+                continue
+            return payload
+        return None
+
+    def _merge_learned_policy(
+        self,
+        response_policy: AdaptiveResponsePolicy,
+        learned_policy: dict[str, object],
+    ) -> AdaptiveResponsePolicy:
+        merged_hints = list(response_policy.adaptation_hints)
+        merged_hints.append("Reuse a previously successful response policy for a similar interaction.")
+        return response_policy.model_copy(
+            update={
+                "reasoning_effort": str(learned_policy.get("reasoning_effort", response_policy.reasoning_effort)),
+                "target_length": str(learned_policy.get("target_length", response_policy.target_length)),
+                "tone_policy": str(learned_policy.get("tone_policy", response_policy.tone_policy)),
+                "retrieval_policy": str(learned_policy.get("retrieval_policy", response_policy.retrieval_policy)),
+                "example_policy": str(learned_policy.get("example_policy", response_policy.example_policy)),
+                "confidence_policy": str(learned_policy.get("confidence_policy", response_policy.confidence_policy)),
+                "adaptation_hints": merged_hints[:6],
+            }
+        )
+
+    def _parse_policy_memory(self, value: str) -> dict[str, object] | None:
+        try:
+            payload = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return payload if isinstance(payload, dict) else None
+
     def _dedupe(self, values: list[str]) -> list[str]:
         output: list[str] = []
         seen: set[str] = set()
@@ -292,14 +347,21 @@ class DefaultDialoguePlannerHook(DialoguePlannerHook):
 
 
 class DialoguePlanner:
-    def __init__(self, hook: DialoguePlannerHook | None = None) -> None:
+    def __init__(
+        self,
+        hook: DialoguePlannerHook | None = None,
+        memory_retriever: MemoryRetriever | None = None,
+    ) -> None:
         self.hook = hook or DefaultDialoguePlannerHook()
+        self.memory_retriever = memory_retriever
 
     def create_plan(self, request: DialoguePlanRequest) -> DialoguePlanResponse:
+        retrieved_memories = self._retrieve_relevant_policy_memories(request)
         plan = self.hook.create_plan(
             request.turn_input,
             request.perception_state,
             request.working_memory_state,
+            retrieved_memories,
         )
         evaluation = DialoguePlanEvaluation(
             used_recent_context=request.perception_state.references_prior_context,
@@ -327,3 +389,21 @@ class DialoguePlanner:
             },
         )
         return DialoguePlanResponse(plan=plan, evaluation=evaluation)
+
+    def _retrieve_relevant_policy_memories(self, request: DialoguePlanRequest) -> list[RetrievedMemory]:
+        if self.memory_retriever is None:
+            return []
+        interaction_hint = (
+            "social_exchange"
+            if request.perception_state.primary_intent == "social_message"
+            else str(request.perception_state.primary_intent)
+        )
+        retrieval = self.memory_retriever.retrieve(
+            MemoryRetrievalRequest(
+                query_text=interaction_hint,
+                memory_types=["procedural"],
+                tags=["response_policy", interaction_hint],
+                limit=3,
+            )
+        )
+        return retrieval.memories

@@ -7,11 +7,18 @@ import pytest
 os.environ["AI_AGENT_LLM_PROVIDER"] = "mock"
 
 from app import app
+from perception_service.dialogue_planner import DialoguePlanner
 from perception_service.generator import BaseLLMGenerator, LLMProvider
+from perception_service.memory_retriever import MemoryRetriever
+from perception_service.memory_store import MemoryStore
 from perception_service.models import (
+    CriticReview,
+    CriticScores,
+    DialoguePlanRequest,
     GenerationMetadata,
     GenerationRequest,
     GeneratorOutput,
+    MemoryUpsertRequest,
     PromptAssembly,
     RecentContext,
     TurnInput,
@@ -1022,6 +1029,111 @@ def test_memory_committer_persists_explicit_preference_and_commitment():
     )
     assert retrieved.status_code == 200
     assert retrieved.json()["memories"]
+
+
+def test_memory_committer_persists_successful_response_policy():
+    turn = make_turn(
+        turn_id="turn-commit-policy-1",
+        message_text="how are you",
+    )
+    perception_response = client.post("/perception/analyze", json=turn)
+    assert perception_response.status_code == 200
+
+    working_memory_response = client.post(
+        "/working-memory/update",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "current_state": None,
+        },
+    )
+    assert working_memory_response.status_code == 200
+
+    planner_response = client.post(
+        "/dialogue-planner/plan",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+        },
+    )
+    assert planner_response.status_code == 200
+
+    response = client.post(
+        "/memory/commit",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+            "dialogue_plan": planner_response.json()["plan"],
+            "critic_review": {
+                "passed": True,
+                "scores": {
+                    "relevance": 0.8,
+                    "clarity": 0.8,
+                    "faithfulness_to_plan": 0.8,
+                    "tone_fit": 0.8,
+                    "hallucination_risk": 0.1,
+                },
+                "findings": [],
+                "recommended_edits": [],
+                "debug_signals": {},
+            },
+            "persist_committed": True,
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["evaluation"]["committed_count"] >= 1
+    assert any("response_policy." in memory["key"] for memory in payload["committed_memories"])
+
+
+def test_dialogue_planner_reuses_learned_response_policy():
+    store = MemoryStore()
+    retriever = MemoryRetriever(store)
+    planner = DialoguePlanner(memory_retriever=retriever)
+
+    store.upsert(
+        MemoryUpsertRequest(
+            memory_type="procedural",
+            key="response_policy.social_exchange",
+            value='{"interaction_type":"social_exchange","reasoning_effort":"low","target_length":"medium","tone_policy":"warm","retrieval_policy":"minimal_retrieval","example_policy":"examples_optional","confidence_policy":"answer_directly"}',
+            confidence=0.91,
+            source_turn_id="memory-seed-1",
+            tags=["procedural", "response_policy", "social_exchange"],
+            evidence=["Successful prior social exchange."],
+        )
+    )
+
+    turn = TurnInput(
+        turn_id="turn-policy-reuse-1",
+        session_id="session-policy-reuse-1",
+        user_id="user-policy-reuse-1",
+        timestamp=datetime(2026, 5, 19, 11, 0, 0),
+        message_text="how are you",
+    )
+    perception_response = client.post("/perception/analyze", json=turn.model_dump(mode="json"))
+    assert perception_response.status_code == 200
+    working_memory_response = client.post(
+        "/working-memory/update",
+        json={
+            "turn_input": turn.model_dump(mode="json"),
+            "perception_state": perception_response.json(),
+            "current_state": None,
+        },
+    )
+    assert working_memory_response.status_code == 200
+
+    plan_response = planner.create_plan(
+        DialoguePlanRequest(
+            turn_input=turn,
+            perception_state=perception_response.json(),
+            working_memory_state=working_memory_response.json()["state"],
+        )
+    )
+    assert plan_response.plan.debug_signals["policy_source"] == "memory_reuse"
+    assert plan_response.plan.response_policy.reasoning_effort == "low"
+    assert plan_response.plan.response_policy.target_length == "medium"
 
 
 def test_memory_committer_can_dry_run_without_persisting():
