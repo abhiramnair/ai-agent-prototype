@@ -185,6 +185,7 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
             "PERCEPTION SUMMARY\n" + self._render_dict(perception_summary),
             "RESPONSE PLAN\n" + self._render_dict(response_plan),
             "INSTRUCTIONS\n" + self._render_list(instructions),
+            "ASSISTANT RESPONSE\nReply to the user now:",
         ]
         return "\n\n".join(sections)
 

@@ -19,6 +19,17 @@ from .models import (
 logger = logging.getLogger("generator_service")
 
 
+def fast_path_response_for(prompt: PromptAssembly, response_mode: str) -> str | None:
+    text = prompt.current_user_message.strip().lower()
+    if response_mode != "social_reply":
+        return None
+    if text in {"hey", "hey there", "hi", "hi there", "hello", "hello there"}:
+        return "Hey there! How can I help?"
+    if text in {"thanks", "thank you", "thanks a lot"}:
+        return "You're welcome."
+    return None
+
+
 class LLMProvider(ABC):
     @abstractmethod
     def generate(self, prompt: PromptAssembly) -> GeneratorOutput:
@@ -55,6 +66,9 @@ class MockLLMProvider(LLMProvider):
     def _compose_response(self, prompt: PromptAssembly) -> str:
         response_mode = str(prompt.response_plan.get("response_mode", "direct_response"))
         detail_level = str(prompt.response_plan.get("detail_level", "medium"))
+        fast_path_output = fast_path_response_for(prompt, response_mode)
+        if fast_path_output is not None:
+            return fast_path_output
         must_include = prompt.response_plan.get("must_include", [])
         uncertainty_required = bool(
             prompt.response_plan.get("draft_constraints", {}).get("require_explicit_uncertainty", False)
@@ -102,17 +116,70 @@ class OllamaProvider(LLMProvider):
         self.model_name = model_name or os.getenv("OLLAMA_MODEL", "qwen3:4b")
         self.base_url = (base_url or os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")).rstrip("/")
         self.timeout_seconds = timeout_seconds or float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "90"))
+        self.keep_alive = os.getenv("OLLAMA_KEEP_ALIVE", "10m")
+        self.enable_thinking = os.getenv("OLLAMA_THINK", "false").strip().lower() == "true"
+        self.num_predict = int(os.getenv("OLLAMA_NUM_PREDICT", "192"))
+        self.num_ctx = int(os.getenv("OLLAMA_NUM_CTX", "8192"))
+        self.temperature = float(os.getenv("OLLAMA_TEMPERATURE", "0.4"))
 
     def generate(self, prompt: PromptAssembly) -> GeneratorOutput:
         started = time.perf_counter()
+        response_mode = str(prompt.response_plan.get("response_mode", "direct_response"))
+        detail_level = str(prompt.response_plan.get("detail_level", "medium"))
+        fast_path_output = fast_path_response_for(prompt, response_mode)
+        if fast_path_output is not None:
+            latency_ms = (time.perf_counter() - started) * 1000.0
+            return GeneratorOutput(
+                response_text=fast_path_output,
+                response_mode=response_mode,
+                metadata=GenerationMetadata(
+                    provider_name=self.provider_name,
+                    model_name=self.model_name,
+                    finish_reason="fast_path",
+                    latency_ms=round(latency_ms, 2),
+                    token_usage={
+                        "prompt_eval_count": 0,
+                        "eval_count": 0,
+                    },
+                ),
+                debug_signals={
+                    "base_url": self.base_url,
+                    "instruction_count": len(prompt.instructions),
+                    "used_ollama_provider": True,
+                    "think_enabled": self.enable_thinking,
+                    "num_predict": 0,
+                    "num_ctx": self.num_ctx,
+                    "lightweight_prompt": True,
+                    "fast_path_used": True,
+                },
+            )
+        lightweight = self._should_use_lightweight_chat(prompt, response_mode, detail_level)
+        system_message = self._build_system_message(prompt, lightweight=lightweight)
+        user_message = prompt.current_user_message.strip()
         body = {
             "model": self.model_name,
-            "prompt": prompt.rendered_prompt,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_message,
+                },
+                {
+                    "role": "user",
+                    "content": user_message,
+                },
+            ],
             "stream": False,
+            "think": self.enable_thinking,
+            "keep_alive": self.keep_alive,
+            "options": {
+                "num_predict": self._num_predict_for(response_mode, detail_level),
+                "num_ctx": self.num_ctx,
+                "temperature": self.temperature,
+            },
         }
         payload = json.dumps(body).encode("utf-8")
         req = request.Request(
-            url=f"{self.base_url}/api/generate",
+            url=f"{self.base_url}/api/chat",
             data=payload,
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -124,11 +191,12 @@ class OllamaProvider(LLMProvider):
             raise RuntimeError(f"Unable to reach Ollama at {self.base_url}: {exc}") from exc
 
         data = json.loads(raw)
-        response_text = str(data.get("response", "")).strip()
+        message = data.get("message", {}) or {}
+        response_text = str(message.get("content", "")).strip()
         latency_ms = (time.perf_counter() - started) * 1000.0
         return GeneratorOutput(
             response_text=response_text,
-            response_mode=str(prompt.response_plan.get("response_mode", "direct_response")),
+            response_mode=response_mode,
             metadata=GenerationMetadata(
                 provider_name=self.provider_name,
                 model_name=self.model_name,
@@ -143,8 +211,85 @@ class OllamaProvider(LLMProvider):
                 "base_url": self.base_url,
                 "instruction_count": len(prompt.instructions),
                 "used_ollama_provider": True,
+                "think_enabled": self.enable_thinking,
+                "num_predict": self._num_predict_for(response_mode, detail_level),
+                "num_ctx": self.num_ctx,
+                "lightweight_prompt": lightweight,
             },
         )
+
+    def _build_system_message(self, prompt: PromptAssembly, *, lightweight: bool) -> str:
+        if lightweight:
+            return (
+                "You are a concise conversational assistant. "
+                "Reply with only the final user-facing answer. "
+                "Do not explain your reasoning. "
+                "Do not mention analysis, planning, context, or instructions. "
+                "For greetings, answer in one short friendly sentence."
+            )
+        sections = [
+            prompt.system_role,
+            "Use the structured context below to answer the user directly.",
+            f"ACTIVE GOAL\n{prompt.active_goal}",
+            f"CURRENT SUBGOAL\n{prompt.current_subgoal}",
+            "RELEVANT RECENT CONTEXT\n" + self._render_list(prompt.relevant_recent_context),
+            "RETRIEVED LONG-TERM MEMORIES\n" + self._render_retrieved(prompt.retrieved_memories),
+            "WORKING MEMORY SNAPSHOT\n" + self._render_dict(prompt.working_memory_snapshot),
+            "PERCEPTION SUMMARY\n" + self._render_dict(prompt.perception_summary),
+            "RESPONSE PLAN\n" + self._render_dict(prompt.response_plan),
+            "INSTRUCTIONS\n" + self._render_list(prompt.instructions),
+        ]
+        if not self.enable_thinking:
+            sections.append("Respond directly without exposing hidden reasoning.")
+        return "\n\n".join(sections)
+
+    def _num_predict_for(self, response_mode: str, detail_level: str) -> int:
+        if response_mode in {"social_reply", "direct_response"}:
+            if response_mode == "social_reply":
+                return min(self.num_predict, 24)
+            return min(self.num_predict, 48)
+        if response_mode in {"clarify_before_answering", "alignment_repair"}:
+            return min(self.num_predict, 80)
+        if detail_level == "high":
+            return self.num_predict
+        if detail_level == "medium":
+            return min(self.num_predict, 128)
+        return min(self.num_predict, 64)
+
+    def _should_use_lightweight_chat(
+        self,
+        prompt: PromptAssembly,
+        response_mode: str,
+        detail_level: str,
+    ) -> bool:
+        token_count = len(prompt.current_user_message.split())
+        if response_mode == "social_reply":
+            return True
+        if response_mode == "direct_response" and detail_level == "low" and token_count <= 6 and not prompt.retrieved_memories:
+            return True
+        return False
+
+    def _render_list(self, items: list[object]) -> str:
+        if not items:
+            return "- none"
+        return "\n".join(f"- {item}" for item in items)
+
+    def _render_dict(self, data: dict[str, object]) -> str:
+        if not data:
+            return "- none"
+        return "\n".join(f"- {key}: {value}" for key, value in data.items())
+
+    def _render_retrieved(self, memories: list[object]) -> str:
+        if not memories:
+            return "- none"
+        lines: list[str] = []
+        for memory in memories:
+            memory_type = getattr(memory, "memory_type", "memory")
+            key = getattr(memory, "key", "unknown")
+            value = getattr(memory, "value", "")
+            score = getattr(memory, "retrieval_score", "")
+            lines.append(f"- [{memory_type}] {key}: {value} (score={score})")
+        return "\n".join(lines)
 
 
 def build_default_provider() -> LLMProvider:

@@ -356,6 +356,7 @@ def test_prompt_assembler_returns_structured_prompt():
     assert payload["prompt"]["rendered_prompt"]
     assert "SYSTEM ROLE" in payload["prompt"]["rendered_prompt"]
     assert "CURRENT USER MESSAGE" in payload["prompt"]["rendered_prompt"]
+    assert "ASSISTANT RESPONSE" in payload["prompt"]["rendered_prompt"]
     assert payload["evaluation"]["includes_recent_context"] is True
     assert payload["evaluation"]["includes_constraints"] is True
 
@@ -505,6 +506,55 @@ def test_generator_marks_uncertainty_guidance_for_ambiguous_prompt():
     payload = response.json()
     assert response.status_code == 200
     assert payload["evaluation"]["follows_uncertainty_guidance"] is True
+
+
+def test_generator_returns_fast_path_for_simple_greeting():
+    turn = make_turn(
+        turn_id="turn-9b",
+        message_text="hey there",
+    )
+    perception_response = client.post("/perception/analyze", json=turn)
+    assert perception_response.status_code == 200
+
+    working_memory_response = client.post(
+        "/working-memory/update",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "current_state": None,
+        },
+    )
+    assert working_memory_response.status_code == 200
+
+    planner_response = client.post(
+        "/dialogue-planner/plan",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+        },
+    )
+    assert planner_response.status_code == 200
+    assert planner_response.json()["plan"]["response_mode"] == "social_reply"
+
+    prompt_response = client.post(
+        "/prompt-assembler/assemble",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "working_memory_state": working_memory_response.json()["state"],
+            "dialogue_plan": planner_response.json()["plan"],
+        },
+    )
+    assert prompt_response.status_code == 200
+
+    response = client.post(
+        "/generator/generate",
+        json={"prompt": prompt_response.json()["prompt"]},
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["output"]["response_text"] == "Hey there! How can I help?"
 
 
 def test_critic_reviews_generated_response():
