@@ -185,6 +185,36 @@ def test_working_memory_update_endpoint_returns_state():
     assert payload["evaluation"]["unresolved_questions_count"] >= 1
 
 
+def test_attention_gate_returns_focus_state():
+    turn = make_turn(
+        turn_id="turn-attn-1",
+        message_text="Can you explain the working memory manager more clearly?",
+        recent_context={
+            "recent_turn_summaries": ["We finished the Perception module."],
+            "active_topic": "working memory manager",
+            "unresolved_questions": ["What should active state contain?"],
+            "conversation_mode": "technical_collaboration",
+            "last_assistant_action": "implemented perception",
+        },
+    )
+    perception_response = client.post("/perception/analyze", json=turn)
+    assert perception_response.status_code == 200
+
+    response = client.post(
+        "/attention-gate/evaluate",
+        json={
+            "turn_input": turn,
+            "perception_state": perception_response.json(),
+            "current_state": None,
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["state"]["primary_focus"]
+    assert payload["state"]["focus_targets"]
+    assert payload["evaluation"]["focus_target_count"] >= 1
+
+
 def test_working_memory_carries_forward_existing_state():
     current_state = {
         "active_goal": "build the conversational architecture",
@@ -373,6 +403,7 @@ def test_prompt_assembler_returns_structured_prompt():
     assert payload["prompt"]["rendered_prompt"]
     assert "SYSTEM ROLE" in payload["prompt"]["rendered_prompt"]
     assert "CURRENT USER MESSAGE" in payload["prompt"]["rendered_prompt"]
+    assert "ATTENTION GATE" in payload["prompt"]["rendered_prompt"]
     assert "ASSISTANT RESPONSE" in payload["prompt"]["rendered_prompt"]
     assert payload["evaluation"]["includes_recent_context"] is True
     assert payload["evaluation"]["includes_constraints"] is True
@@ -1400,6 +1431,7 @@ def test_agent_orchestrator_runs_full_pipeline():
     payload = response.json()
     assert response.status_code == 200
     assert payload["perception"]["primary_intent"]
+    assert payload["attention_gate"]["state"]["primary_focus"]
     assert payload["working_memory"]["state"]["active_goal"]
     assert payload["dialogue_plan"]["plan"]["response_mode"]
     assert payload["prompt_assembly"]["prompt"]["rendered_prompt"]

@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from .models import (
+    AttentionGateState,
     PerceptionState,
     TurnInput,
     WorkingMemoryEvaluation,
@@ -23,6 +24,7 @@ class WorkingMemoryHook(ABC):
         self,
         turn: TurnInput,
         perception: PerceptionState,
+        attention_state: AttentionGateState | None,
         current_state: WorkingMemoryState | None,
     ) -> WorkingMemoryState:
         raise NotImplementedError
@@ -33,6 +35,7 @@ class DefaultWorkingMemoryHook(WorkingMemoryHook):
         self,
         turn: TurnInput,
         perception: PerceptionState,
+        attention_state: AttentionGateState | None,
         current_state: WorkingMemoryState | None,
     ) -> WorkingMemoryState:
         previous = current_state or self._initial_state(turn, perception)
@@ -45,8 +48,8 @@ class DefaultWorkingMemoryHook(WorkingMemoryHook):
         unresolved_questions = self._merge_unresolved_questions(previous, turn, perception)
         recent_turns_compact = self._update_recent_turns(previous, turn, perception)
         emotional_context = self._derive_emotional_context(perception)
-        attention_targets = self._derive_attention_targets(perception, active_entities)
-        suppressed_topics = self._derive_suppressed_topics(previous, perception)
+        attention_targets = self._derive_attention_targets(perception, active_entities, attention_state)
+        suppressed_topics = self._derive_suppressed_topics(previous, perception, attention_state)
 
         return WorkingMemoryState(
             active_goal=active_goal,
@@ -64,6 +67,7 @@ class DefaultWorkingMemoryHook(WorkingMemoryHook):
                 "source_intent": perception.primary_intent,
                 "source_topic": perception.topic,
                 "source_goal": perception.possible_user_goal,
+                "attention_budget": attention_state.attention_budget if attention_state else None,
             },
         )
 
@@ -183,7 +187,10 @@ class DefaultWorkingMemoryHook(WorkingMemoryHook):
         self,
         perception: PerceptionState,
         active_entities: list[str],
+        attention_state: AttentionGateState | None,
     ) -> list[str]:
+        if attention_state and attention_state.focus_targets:
+            return attention_state.focus_targets[:6]
         targets = [perception.topic]
         if perception.references_prior_context:
             targets.append("recent_context")
@@ -194,7 +201,10 @@ class DefaultWorkingMemoryHook(WorkingMemoryHook):
         self,
         previous: WorkingMemoryState,
         perception: PerceptionState,
+        attention_state: AttentionGateState | None,
     ) -> list[str]:
+        if attention_state and attention_state.suppressed_topics:
+            return attention_state.suppressed_topics[:4]
         suppressed = list(previous.suppressed_topics)
         if perception.salience_signals.contains_scope_shift and perception.topic:
             suppressed.append("previous_scope")
@@ -226,6 +236,7 @@ class WorkingMemoryManager:
         next_state = self.hook.update(
             request.turn_input,
             request.perception_state,
+            request.attention_state,
             request.current_state,
         )
         previous = request.current_state

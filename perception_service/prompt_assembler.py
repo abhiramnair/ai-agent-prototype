@@ -5,6 +5,7 @@ import logging
 
 from .memory_retriever import MemoryRetriever
 from .models import (
+    AttentionGateState,
     DialoguePlan,
     MemoryRetrievalRequest,
     PerceptionState,
@@ -26,6 +27,7 @@ class PromptAssemblerHook(ABC):
         self,
         turn: TurnInput,
         perception: PerceptionState,
+        attention_state: AttentionGateState | None,
         working_memory: WorkingMemoryState,
         dialogue_plan: DialoguePlan,
         retrieved_memories: list[RetrievedMemory],
@@ -40,6 +42,7 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
         self,
         turn: TurnInput,
         perception: PerceptionState,
+        attention_state: AttentionGateState | None,
         working_memory: WorkingMemoryState,
         dialogue_plan: DialoguePlan,
         retrieved_memories: list[RetrievedMemory],
@@ -47,12 +50,13 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
         relevant_recent_context = self._collect_recent_context(turn, working_memory)
         working_memory_snapshot = self._build_working_memory_snapshot(working_memory)
         perception_summary = self._build_perception_summary(perception)
-        response_plan = self._build_response_plan(dialogue_plan)
-        instructions = self._build_instructions(perception, dialogue_plan, retrieved_memories)
+        response_plan = self._build_response_plan(dialogue_plan, attention_state)
+        instructions = self._build_instructions(perception, attention_state, dialogue_plan, retrieved_memories)
         rendered_prompt = self._render_prompt(
             turn=turn,
             relevant_recent_context=relevant_recent_context,
             retrieved_memories=retrieved_memories,
+            attention_state=attention_state,
             working_memory=working_memory,
             perception_summary=perception_summary,
             response_plan=response_plan,
@@ -118,7 +122,7 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
             "possible_user_goal": perception.possible_user_goal,
         }
 
-    def _build_response_plan(self, dialogue_plan: DialoguePlan) -> dict[str, object]:
+    def _build_response_plan(self, dialogue_plan: DialoguePlan, attention_state: AttentionGateState | None) -> dict[str, object]:
         return {
             "response_mode": dialogue_plan.response_mode,
             "primary_goal": dialogue_plan.primary_goal,
@@ -132,11 +136,13 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
             "must_avoid": dialogue_plan.must_avoid,
             "draft_constraints": dialogue_plan.draft_constraints.model_dump(mode="json"),
             "response_policy": dialogue_plan.response_policy.model_dump(mode="json"),
+            "attention_gate": attention_state.model_dump(mode="json") if attention_state else {},
         }
 
     def _build_instructions(
         self,
         perception: PerceptionState,
+        attention_state: AttentionGateState | None,
         dialogue_plan: DialoguePlan,
         retrieved_memories: list[RetrievedMemory],
     ) -> list[str]:
@@ -149,6 +155,8 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
             f"Adaptive policy: {hint}"
             for hint in dialogue_plan.response_policy.adaptation_hints
         )
+        if attention_state:
+            instructions.append(f"Primary focus: {attention_state.primary_focus}.")
         if dialogue_plan.must_include:
             instructions.append(f"Include: {', '.join(dialogue_plan.must_include)}.")
         if dialogue_plan.must_avoid:
@@ -166,6 +174,7 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
         turn: TurnInput,
         relevant_recent_context: list[str],
         retrieved_memories: list[RetrievedMemory],
+        attention_state: AttentionGateState | None,
         working_memory: WorkingMemoryState,
         perception_summary: dict[str, object],
         response_plan: dict[str, object],
@@ -187,6 +196,7 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
                     "emotional_context": working_memory.emotional_context,
                 }
             ),
+            "ATTENTION GATE\n" + self._render_dict(attention_state.model_dump(mode="json") if attention_state else {}),
             "PERCEPTION SUMMARY\n" + self._render_dict(perception_summary),
             "RESPONSE PLAN\n" + self._render_dict(response_plan),
             "INSTRUCTIONS\n" + self._render_list(instructions),
@@ -244,6 +254,7 @@ class PromptAssembler:
         prompt = self.hook.assemble(
             request.turn_input,
             request.perception_state,
+            request.attention_state,
             request.working_memory_state,
             request.dialogue_plan,
             retrieved_memories,

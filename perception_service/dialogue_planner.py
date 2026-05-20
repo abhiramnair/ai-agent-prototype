@@ -7,6 +7,7 @@ import logging
 from .memory_retriever import MemoryRetriever
 from .models import (
     AdaptiveResponsePolicy,
+    AttentionGateState,
     DialoguePlan,
     DialoguePlanEvaluation,
     DialoguePlanRequest,
@@ -28,6 +29,7 @@ class DialoguePlannerHook(ABC):
         self,
         turn: TurnInput,
         perception: PerceptionState,
+        attention_state: AttentionGateState | None,
         working_memory: WorkingMemoryState,
         retrieved_memories: list[RetrievedMemory],
     ) -> DialoguePlan:
@@ -39,6 +41,7 @@ class DefaultDialoguePlannerHook(DialoguePlannerHook):
         self,
         turn: TurnInput,
         perception: PerceptionState,
+        attention_state: AttentionGateState | None,
         working_memory: WorkingMemoryState,
         retrieved_memories: list[RetrievedMemory],
     ) -> DialoguePlan:
@@ -79,6 +82,7 @@ class DefaultDialoguePlannerHook(DialoguePlannerHook):
                 "reasoning_effort": response_policy.reasoning_effort,
                 "policy_source": policy_source,
                 "retrieved_policy_count": len(retrieved_memories),
+                "attention_budget": attention_state.attention_budget if attention_state else None,
             },
         )
 
@@ -360,6 +364,7 @@ class DialoguePlanner:
         plan = self.hook.create_plan(
             request.turn_input,
             request.perception_state,
+            request.attention_state,
             request.working_memory_state,
             retrieved_memories,
         )
@@ -398,7 +403,19 @@ class DialoguePlanner:
             if request.perception_state.primary_intent == "social_message"
             else str(request.perception_state.primary_intent)
         )
+        attention_focus = request.attention_state.primary_focus if request.attention_state else request.perception_state.topic
         retrieval = self.memory_retriever.retrieve(
+            MemoryRetrievalRequest(
+                query_text=f"{interaction_hint} {attention_focus}",
+                memory_types=["procedural"],
+                tags=["response_policy", interaction_hint],
+                limit=3,
+            )
+        )
+        if retrieval.memories:
+            return retrieval.memories
+
+        fallback = self.memory_retriever.retrieve(
             MemoryRetrievalRequest(
                 query_text=interaction_hint,
                 memory_types=["procedural"],
@@ -406,4 +423,4 @@ class DialoguePlanner:
                 limit=3,
             )
         )
-        return retrieval.memories
+        return fallback.memories

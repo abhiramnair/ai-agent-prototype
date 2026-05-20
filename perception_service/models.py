@@ -126,6 +126,35 @@ class FixtureResult(BaseModel):
     mismatches: list[str] = Field(default_factory=list)
 
 
+class AttentionGateState(BaseModel):
+    primary_focus: str
+    focus_targets: list[str] = Field(default_factory=list)
+    suppressed_topics: list[str] = Field(default_factory=list)
+    salience_score: float = Field(ge=0.0, le=1.0)
+    attention_budget: float = Field(ge=0.0, le=1.0)
+    requires_recent_context: bool = False
+    memory_retrieval_mode: str
+    debug_signals: dict[str, Any] = Field(default_factory=dict)
+
+
+class AttentionGateRequest(BaseModel):
+    turn_input: TurnInput
+    perception_state: PerceptionState
+    current_state: WorkingMemoryState | None = None
+
+
+class AttentionGateEvaluation(BaseModel):
+    focus_target_count: int = Field(ge=0)
+    suppressed_topic_count: int = Field(ge=0)
+    references_recent_context: bool
+    attention_budget_high: bool
+
+
+class AttentionGateResponse(BaseModel):
+    state: AttentionGateState
+    evaluation: AttentionGateEvaluation
+
+
 class WorkingMemoryState(BaseModel):
     active_goal: str
     current_subgoal: str
@@ -144,6 +173,7 @@ class WorkingMemoryState(BaseModel):
 class WorkingMemoryUpdateRequest(BaseModel):
     turn_input: TurnInput
     perception_state: PerceptionState
+    attention_state: AttentionGateState | None = None
     current_state: WorkingMemoryState | None = None
 
 
@@ -199,6 +229,7 @@ class DialoguePlan(BaseModel):
 class DialoguePlanRequest(BaseModel):
     turn_input: TurnInput
     perception_state: PerceptionState
+    attention_state: AttentionGateState | None = None
     working_memory_state: WorkingMemoryState
 
 
@@ -232,6 +263,7 @@ class PromptAssembly(BaseModel):
 class PromptAssemblyRequest(BaseModel):
     turn_input: TurnInput
     perception_state: PerceptionState
+    attention_state: AttentionGateState | None = None
     working_memory_state: WorkingMemoryState
     dialogue_plan: DialoguePlan
 
@@ -494,6 +526,7 @@ class AgentRunEvaluation(BaseModel):
 
 class AgentRunResponse(BaseModel):
     perception: PerceptionState
+    attention_gate: AttentionGateResponse
     working_memory: WorkingMemoryUpdateResponse
     dialogue_plan: DialoguePlanResponse
     prompt_assembly: PromptAssemblyResponse

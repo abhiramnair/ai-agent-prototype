@@ -9,9 +9,12 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .attention_gate import AttentionGate
 from .models import (
     AgentRunRequest,
     AgentRunResponse,
+    AttentionGateRequest,
+    AttentionGateResponse,
     ConfigResponse,
     CriticRequest,
     CriticResponse,
@@ -58,6 +61,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Perception Service", version="0.1.0")
     ui_dir = Path(__file__).resolve().parent / "ui"
     pipeline = PerceptionPipeline()
+    attention_gate = AttentionGate()
     working_memory = WorkingMemoryManager()
     memory_store = MemoryStore()
     memory_retriever = MemoryRetriever(memory_store)
@@ -69,6 +73,7 @@ def create_app() -> FastAPI:
     prompt_assembler = PromptAssembler(memory_retriever=memory_retriever)
     orchestrator = AgentOrchestrator(
         perception_pipeline=pipeline,
+        attention_gate=attention_gate,
         working_memory_manager=working_memory,
         dialogue_planner=dialogue_planner,
         prompt_assembler=prompt_assembler,
@@ -90,6 +95,10 @@ def create_app() -> FastAPI:
     @app.post("/working-memory/update", response_model=WorkingMemoryUpdateResponse)
     def update_working_memory(request: WorkingMemoryUpdateRequest) -> WorkingMemoryUpdateResponse:
         return working_memory.update(request)
+
+    @app.post("/attention-gate/evaluate", response_model=AttentionGateResponse)
+    def evaluate_attention_gate(request: AttentionGateRequest) -> AttentionGateResponse:
+        return attention_gate.evaluate(request)
 
     @app.post("/dialogue-planner/plan", response_model=DialoguePlanResponse)
     def create_dialogue_plan(request: DialoguePlanRequest) -> DialoguePlanResponse:
