@@ -19,17 +19,6 @@ from .models import (
 logger = logging.getLogger("generator_service")
 
 
-def fast_path_response_for(prompt: PromptAssembly, response_mode: str) -> str | None:
-    text = prompt.current_user_message.strip().lower()
-    if response_mode != "social_reply":
-        return None
-    if text in {"hey", "hey there", "hi", "hi there", "hello", "hello there"}:
-        return "Hey there! How can I help?"
-    if text in {"thanks", "thank you", "thanks a lot"}:
-        return "You're welcome."
-    return None
-
-
 class LLMProvider(ABC):
     @abstractmethod
     def generate(self, prompt: PromptAssembly) -> GeneratorOutput:
@@ -66,9 +55,10 @@ class MockLLMProvider(LLMProvider):
     def _compose_response(self, prompt: PromptAssembly) -> str:
         response_mode = str(prompt.response_plan.get("response_mode", "direct_response"))
         detail_level = str(prompt.response_plan.get("detail_level", "medium"))
-        fast_path_output = fast_path_response_for(prompt, response_mode)
-        if fast_path_output is not None:
-            return fast_path_output
+        response_policy = prompt.response_plan.get("response_policy", {})
+        interaction_type = str(response_policy.get("interaction_type", "general_question"))
+        tone_policy = str(response_policy.get("tone_policy", "direct"))
+        target_length = str(response_policy.get("target_length", detail_level))
         must_include = prompt.response_plan.get("must_include", [])
         uncertainty_required = bool(
             prompt.response_plan.get("draft_constraints", {}).get("require_explicit_uncertainty", False)
@@ -76,7 +66,8 @@ class MockLLMProvider(LLMProvider):
 
         opening = self._opening_for_mode(response_mode)
         goal_line = f"I'm focusing on {prompt.current_subgoal}."
-        detail_line = f"I'll keep the answer at a {detail_level} level of detail."
+        detail_line = f"I'll keep the answer at a {target_length} length with a {tone_policy} tone."
+        interaction_line = f"This turn looks like a {interaction_type} interaction."
         include_line = ""
         if must_include:
             include_line = "I'll make sure to cover " + ", ".join(str(item) for item in must_include[:3]) + "."
@@ -86,7 +77,7 @@ class MockLLMProvider(LLMProvider):
 
         return " ".join(
             part
-            for part in [opening, goal_line, detail_line, include_line, uncertainty_line]
+            for part in [opening, interaction_line, goal_line, detail_line, include_line, uncertainty_line]
             if part
         ).strip()
 
@@ -126,33 +117,7 @@ class OllamaProvider(LLMProvider):
         started = time.perf_counter()
         response_mode = str(prompt.response_plan.get("response_mode", "direct_response"))
         detail_level = str(prompt.response_plan.get("detail_level", "medium"))
-        fast_path_output = fast_path_response_for(prompt, response_mode)
-        if fast_path_output is not None:
-            latency_ms = (time.perf_counter() - started) * 1000.0
-            return GeneratorOutput(
-                response_text=fast_path_output,
-                response_mode=response_mode,
-                metadata=GenerationMetadata(
-                    provider_name=self.provider_name,
-                    model_name=self.model_name,
-                    finish_reason="fast_path",
-                    latency_ms=round(latency_ms, 2),
-                    token_usage={
-                        "prompt_eval_count": 0,
-                        "eval_count": 0,
-                    },
-                ),
-                debug_signals={
-                    "base_url": self.base_url,
-                    "instruction_count": len(prompt.instructions),
-                    "used_ollama_provider": True,
-                    "think_enabled": self.enable_thinking,
-                    "num_predict": 0,
-                    "num_ctx": self.num_ctx,
-                    "lightweight_prompt": True,
-                    "fast_path_used": True,
-                },
-            )
+        response_policy = prompt.response_plan.get("response_policy", {})
         lightweight = self._should_use_lightweight_chat(prompt, response_mode, detail_level)
         system_message = self._build_system_message(prompt, lightweight=lightweight)
         user_message = prompt.current_user_message.strip()
@@ -172,7 +137,7 @@ class OllamaProvider(LLMProvider):
             "think": self.enable_thinking,
             "keep_alive": self.keep_alive,
             "options": {
-                "num_predict": self._num_predict_for(response_mode, detail_level),
+                "num_predict": self._num_predict_for(response_mode, detail_level, response_policy),
                 "num_ctx": self.num_ctx,
                 "temperature": self.temperature,
             },
@@ -212,7 +177,7 @@ class OllamaProvider(LLMProvider):
                 "instruction_count": len(prompt.instructions),
                 "used_ollama_provider": True,
                 "think_enabled": self.enable_thinking,
-                "num_predict": self._num_predict_for(response_mode, detail_level),
+                "num_predict": self._num_predict_for(response_mode, detail_level, response_policy),
                 "num_ctx": self.num_ctx,
                 "lightweight_prompt": lightweight,
             },
@@ -221,11 +186,11 @@ class OllamaProvider(LLMProvider):
     def _build_system_message(self, prompt: PromptAssembly, *, lightweight: bool) -> str:
         if lightweight:
             return (
-                "You are a concise conversational assistant. "
-                "Reply with only the final user-facing answer. "
-                "Do not explain your reasoning. "
-                "Do not mention analysis, planning, context, or instructions. "
-                "For greetings, answer in one short friendly sentence."
+                "You are replying to the user's latest message. "
+                "Write only the final assistant reply. "
+                "Keep it natural, brief, and conversational. "
+                "Do not mention analysis, reasoning, policy, planning, context, or instructions. "
+                "Do not say things like 'I need to', 'the user asked', or 'the policy says'."
             )
         sections = [
             prompt.system_role,
@@ -243,11 +208,14 @@ class OllamaProvider(LLMProvider):
             sections.append("Respond directly without exposing hidden reasoning.")
         return "\n\n".join(sections)
 
-    def _num_predict_for(self, response_mode: str, detail_level: str) -> int:
-        if response_mode in {"social_reply", "direct_response"}:
-            if response_mode == "social_reply":
-                return min(self.num_predict, 24)
-            return min(self.num_predict, 48)
+    def _num_predict_for(self, response_mode: str, detail_level: str, response_policy: dict[str, object] | None = None) -> int:
+        policy = response_policy or {}
+        reasoning_effort = str(policy.get("reasoning_effort", "medium"))
+        target_length = str(policy.get("target_length", detail_level))
+        if reasoning_effort == "minimal":
+            return min(self.num_predict, 24 if target_length == "short" else 48)
+        if reasoning_effort == "low":
+            return min(self.num_predict, 96 if target_length == "short" else 120)
         if response_mode in {"clarify_before_answering", "alignment_repair"}:
             return min(self.num_predict, 80)
         if detail_level == "high":
@@ -262,10 +230,12 @@ class OllamaProvider(LLMProvider):
         response_mode: str,
         detail_level: str,
     ) -> bool:
+        response_policy = prompt.response_plan.get("response_policy", {})
+        reasoning_effort = str(response_policy.get("reasoning_effort", "medium"))
         token_count = len(prompt.current_user_message.split())
-        if response_mode == "social_reply":
+        if reasoning_effort == "minimal":
             return True
-        if response_mode == "direct_response" and detail_level == "low" and token_count <= 6 and not prompt.retrieved_memories:
+        if reasoning_effort == "low" and detail_level == "low" and token_count <= 10 and not prompt.retrieved_memories:
             return True
         return False
 

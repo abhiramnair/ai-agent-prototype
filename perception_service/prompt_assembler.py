@@ -131,6 +131,7 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
             "must_include": dialogue_plan.must_include,
             "must_avoid": dialogue_plan.must_avoid,
             "draft_constraints": dialogue_plan.draft_constraints.model_dump(mode="json"),
+            "response_policy": dialogue_plan.response_policy.model_dump(mode="json"),
         }
 
     def _build_instructions(
@@ -144,6 +145,10 @@ class DefaultPromptAssemblerHook(PromptAssemblerHook):
             "Stay within the active topic and current subgoal.",
             "Follow the response plan and draft constraints.",
         ]
+        instructions.extend(
+            f"Adaptive policy: {hint}"
+            for hint in dialogue_plan.response_policy.adaptation_hints
+        )
         if dialogue_plan.must_include:
             instructions.append(f"Include: {', '.join(dialogue_plan.must_include)}.")
         if dialogue_plan.must_avoid:

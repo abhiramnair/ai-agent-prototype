@@ -92,6 +92,7 @@ class AgentOrchestrator:
                     turn_input=request.turn_input,
                     perception_state=perception,
                     working_memory_state=working_memory.state,
+                    dialogue_plan=dialogue_plan.plan,
                     critic_review=critic.review,
                     persist_committed=request.persist_committed_memory,
                 )

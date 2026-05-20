@@ -168,6 +168,18 @@ class DraftConstraints(BaseModel):
     require_explicit_uncertainty: bool = False
 
 
+class AdaptiveResponsePolicy(BaseModel):
+    interaction_type: str
+    reasoning_effort: str
+    target_length: str
+    tone_policy: str
+    retrieval_policy: str
+    example_policy: str
+    confidence_policy: str
+    adaptation_hints: list[str] = Field(default_factory=list)
+    learning_objective: str
+
+
 class DialoguePlan(BaseModel):
     response_mode: str
     primary_goal: str
@@ -180,6 +192,7 @@ class DialoguePlan(BaseModel):
     must_include: list[str] = Field(default_factory=list)
     must_avoid: list[str] = Field(default_factory=list)
     draft_constraints: DraftConstraints = Field(default_factory=DraftConstraints)
+    response_policy: AdaptiveResponsePolicy
     debug_signals: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -445,6 +458,7 @@ class MemoryCommitRequest(BaseModel):
     turn_input: TurnInput
     perception_state: PerceptionState
     working_memory_state: WorkingMemoryState
+    dialogue_plan: DialoguePlan | None = None
     critic_review: CriticReview | None = None
     persist_committed: bool = True
 

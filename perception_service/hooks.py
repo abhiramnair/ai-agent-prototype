@@ -66,6 +66,8 @@ class DefaultIntentHook(IntentHook):
             return IntentLabel.REJECTION, 0.86
         if text.startswith(("hey", "hi", "hello")):
             return IntentLabel.SOCIAL_MESSAGE, 0.9
+        if any(phrase in text for phrase in ["how are you", "how's it going", "hows it going", "what's up", "whats up"]):
+            return IntentLabel.SOCIAL_MESSAGE, 0.88
         if any(phrase in text for phrase in ["i prefer", "i want", "i like", "please keep", "lets go with", "let's go with"]):
             return IntentLabel.PREFERENCE_STATEMENT, 0.83
         if any(phrase in text for phrase in ["brainstorm", "ideas", "options", "what if we"]) and features.has_question_mark:
@@ -76,7 +78,7 @@ class DefaultIntentHook(IntentHook):
             return IntentLabel.REQUEST_ACTION, 0.84
         if features.has_question_mark or text.startswith(("what", "why", "how", "when", "where", "who")):
             return IntentLabel.ASK_QUESTION, 0.81
-        if any(phrase in text for phrase in ["hello", "hi", "hey", "thanks", "thank you"]):
+        if any(phrase in text for phrase in ["hello", "hi", "hey", "thanks", "thank you", "how are you", "what's up", "whats up"]):
             return IntentLabel.SOCIAL_MESSAGE, 0.75
         if any(phrase in text for phrase in ["i'm worried", "i am worried", "frustrated", "upset", "confused"]):
             return IntentLabel.EMOTIONAL_EXPRESSION, 0.78

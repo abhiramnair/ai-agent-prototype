@@ -75,6 +75,7 @@ class MemoryCommitter:
         turn = request.turn_input
         perception = request.perception_state
         critic = request.critic_review
+        dialogue_plan = request.dialogue_plan
 
         if perception.salience_signals.contains_preference:
             candidates.append(
@@ -145,6 +146,31 @@ class MemoryCommitter:
                     explicit_user_signal=False,
                     tags=["episodic", perception.primary_intent],
                     rationale="Successful turn recorded as an episodic memory for future recall.",
+                )
+            )
+
+        if critic and critic.passed and dialogue_plan is not None:
+            policy = dialogue_plan.response_policy
+            candidates.append(
+                self._make_candidate(
+                    candidate_type="procedural",
+                    key=f"response_policy.{self._slugify(policy.interaction_type)}",
+                    content=(
+                        f"interaction_type={policy.interaction_type}; "
+                        f"reasoning_effort={policy.reasoning_effort}; "
+                        f"target_length={policy.target_length}; "
+                        f"tone_policy={policy.tone_policy}; "
+                        f"confidence_policy={policy.confidence_policy}"
+                    ),
+                    source_turn_id=turn.turn_id,
+                    novelty_score=0.41,
+                    importance_score=0.64,
+                    repeat_score=0.52,
+                    trust_score=0.79,
+                    future_utility_score=0.77,
+                    explicit_user_signal=False,
+                    tags=["procedural", "response_policy", policy.interaction_type],
+                    rationale="Successful turn recorded so future similar turns can reuse the response policy that worked.",
                 )
             )
 

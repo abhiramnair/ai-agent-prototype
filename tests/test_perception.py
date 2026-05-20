@@ -266,6 +266,8 @@ def test_dialogue_planner_returns_structured_plan():
     assert response.status_code == 200
     assert payload["plan"]["response_mode"] == "structured_explanation"
     assert payload["plan"]["detail_level"] == "high"
+    assert payload["plan"]["response_policy"]["interaction_type"] == "knowledge_explanation"
+    assert payload["plan"]["response_policy"]["reasoning_effort"] == "high"
     assert payload["plan"]["draft_constraints"]["prefer_examples"] is True
     assert payload["evaluation"]["plan_has_required_fields"] is True
 
@@ -508,13 +510,14 @@ def test_generator_marks_uncertainty_guidance_for_ambiguous_prompt():
     assert payload["evaluation"]["follows_uncertainty_guidance"] is True
 
 
-def test_generator_returns_fast_path_for_simple_greeting():
+def test_generator_uses_adaptive_policy_for_simple_social_turn():
     turn = make_turn(
         turn_id="turn-9b",
-        message_text="hey there",
+        message_text="how are you",
     )
     perception_response = client.post("/perception/analyze", json=turn)
     assert perception_response.status_code == 200
+    assert perception_response.json()["primary_intent"] == "social_message"
 
     working_memory_response = client.post(
         "/working-memory/update",
@@ -536,6 +539,9 @@ def test_generator_returns_fast_path_for_simple_greeting():
     )
     assert planner_response.status_code == 200
     assert planner_response.json()["plan"]["response_mode"] == "social_reply"
+    assert planner_response.json()["plan"]["response_policy"]["reasoning_effort"] == "minimal"
+    assert planner_response.json()["plan"]["response_policy"]["target_length"] == "short"
+    assert planner_response.json()["plan"]["must_include"] == []
 
     prompt_response = client.post(
         "/prompt-assembler/assemble",
@@ -554,7 +560,7 @@ def test_generator_returns_fast_path_for_simple_greeting():
     )
     payload = response.json()
     assert response.status_code == 200
-    assert payload["output"]["response_text"] == "Hey there! How can I help?"
+    assert payload["output"]["response_text"]
 
 
 def test_critic_reviews_generated_response():
@@ -648,6 +654,17 @@ def test_critic_flags_missing_uncertainty_when_required():
                 "avoid_scope_drift": True,
                 "prefer_examples": False,
                 "require_explicit_uncertainty": True,
+            },
+            "response_policy": {
+                "interaction_type": "ambiguity_resolution",
+                "reasoning_effort": "medium",
+                "target_length": "medium",
+                "tone_policy": "direct",
+                "retrieval_policy": "minimal_retrieval",
+                "example_policy": "examples_optional",
+                "confidence_policy": "surface_uncertainty_and_clarify",
+                "adaptation_hints": ["State uncertainty explicitly when assumptions are necessary."],
+                "learning_objective": "Learn whether ambiguity_resolution turns work best with medium reasoning effort and medium responses.",
             },
         },
         "instructions": ["State uncertainty explicitly when assumptions are necessary."],

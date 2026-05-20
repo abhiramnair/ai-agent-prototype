@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 import logging
 
 from .models import (
+    AdaptiveResponsePolicy,
     DialoguePlan,
     DialoguePlanEvaluation,
     DialoguePlanRequest,
@@ -44,6 +45,7 @@ class DefaultDialoguePlannerHook(DialoguePlannerHook):
         must_include = self._derive_must_include(perception, working_memory)
         must_avoid = self._derive_must_avoid(perception, working_memory)
         constraints = self._derive_constraints(perception, response_mode)
+        response_policy = self._derive_response_policy(perception, working_memory, response_mode, detail_level)
 
         return DialoguePlan(
             response_mode=response_mode,
@@ -57,10 +59,13 @@ class DefaultDialoguePlannerHook(DialoguePlannerHook):
             must_include=must_include,
             must_avoid=must_avoid,
             draft_constraints=constraints,
+            response_policy=response_policy,
             debug_signals={
                 "source_intent": perception.primary_intent,
                 "source_response_mode": working_memory.response_mode,
                 "active_entities_count": len(working_memory.active_entities),
+                "interaction_type": response_policy.interaction_type,
+                "reasoning_effort": response_policy.reasoning_effort,
             },
         )
 
@@ -121,7 +126,12 @@ class DefaultDialoguePlannerHook(DialoguePlannerHook):
         perception: PerceptionState,
         working_memory: WorkingMemoryState,
     ) -> list[str]:
-        items = [working_memory.current_subgoal]
+        if perception.primary_intent == "social_message":
+            return []
+
+        items: list[str] = []
+        if perception.primary_intent in {"ask_explanation", "request_action", "brainstorming", "correction"}:
+            items.append(working_memory.current_subgoal)
         if perception.references_prior_context:
             items.append("acknowledge recent context")
         if working_memory.unresolved_questions:
@@ -149,6 +159,121 @@ class DefaultDialoguePlannerHook(DialoguePlannerHook):
             avoid_scope_drift=True,
             prefer_examples=perception.primary_intent in {"ask_explanation", "brainstorming"},
             require_explicit_uncertainty=response_mode == "clarify_before_answering" or perception.ambiguity_score >= 0.45,
+        )
+
+    def _derive_response_policy(
+        self,
+        perception: PerceptionState,
+        working_memory: WorkingMemoryState,
+        response_mode: str,
+        detail_level: str,
+    ) -> AdaptiveResponsePolicy:
+        interaction_type = self._derive_interaction_type(perception, response_mode)
+        reasoning_effort = self._derive_reasoning_effort(perception, response_mode, detail_level)
+        target_length = self._derive_target_length(perception, detail_level)
+        tone_policy = self._derive_tone_policy(perception, working_memory)
+        retrieval_policy = self._derive_retrieval_policy(perception)
+        example_policy = "prefer_examples" if detail_level == "high" or perception.primary_intent == "brainstorming" else "examples_optional"
+        confidence_policy = self._derive_confidence_policy(perception)
+        adaptation_hints = self._derive_adaptation_hints(perception, working_memory, reasoning_effort, target_length)
+        learning_objective = self._derive_learning_objective(interaction_type, reasoning_effort, target_length)
+        return AdaptiveResponsePolicy(
+            interaction_type=interaction_type,
+            reasoning_effort=reasoning_effort,
+            target_length=target_length,
+            tone_policy=tone_policy,
+            retrieval_policy=retrieval_policy,
+            example_policy=example_policy,
+            confidence_policy=confidence_policy,
+            adaptation_hints=adaptation_hints,
+            learning_objective=learning_objective,
+        )
+
+    def _derive_interaction_type(self, perception: PerceptionState, response_mode: str) -> str:
+        if response_mode == "clarify_before_answering":
+            return "ambiguity_resolution"
+        if perception.primary_intent == "social_message":
+            return "social_exchange"
+        if perception.primary_intent == "ask_explanation":
+            return "knowledge_explanation"
+        if perception.primary_intent == "request_action":
+            return "execution_support"
+        if perception.primary_intent == "brainstorming":
+            return "exploratory_thinking"
+        if perception.primary_intent == "correction":
+            return "alignment_repair"
+        if perception.primary_intent == "emotional_expression":
+            return "emotional_support"
+        if perception.primary_intent == "preference_statement":
+            return "preference_shaping"
+        return "general_question"
+
+    def _derive_reasoning_effort(self, perception: PerceptionState, response_mode: str, detail_level: str) -> str:
+        if response_mode == "clarify_before_answering":
+            return "medium"
+        if perception.primary_intent == "social_message":
+            return "minimal"
+        if perception.primary_intent in {"ask_explanation", "brainstorming"} and detail_level == "high":
+            return "high"
+        if perception.primary_intent in {"request_action", "correction", "clarification"}:
+            return "medium"
+        return "low"
+
+    def _derive_target_length(self, perception: PerceptionState, detail_level: str) -> str:
+        if perception.primary_intent == "social_message":
+            return "short"
+        if detail_level == "high":
+            return "long"
+        if perception.primary_intent in {"request_action", "clarification", "correction"}:
+            return "medium"
+        return "medium"
+
+    def _derive_tone_policy(self, perception: PerceptionState, working_memory: WorkingMemoryState) -> str:
+        if working_memory.emotional_context in {"sensitive", "tense"}:
+            return "supportive"
+        if perception.primary_intent == "social_message":
+            return "warm"
+        if perception.primary_intent in {"ask_explanation", "request_action"}:
+            return "clear_structured"
+        return "direct"
+
+    def _derive_retrieval_policy(self, perception: PerceptionState) -> str:
+        if perception.references_prior_context:
+            return "prefer_recent_context"
+        if perception.primary_intent in {"request_action", "correction", "preference_statement"}:
+            return "focused_retrieval"
+        return "minimal_retrieval"
+
+    def _derive_confidence_policy(self, perception: PerceptionState) -> str:
+        if perception.ambiguity_score >= 0.65:
+            return "surface_uncertainty_and_clarify"
+        if perception.ambiguity_score >= 0.45:
+            return "surface_uncertainty_if_needed"
+        return "answer_directly"
+
+    def _derive_adaptation_hints(
+        self,
+        perception: PerceptionState,
+        working_memory: WorkingMemoryState,
+        reasoning_effort: str,
+        target_length: str,
+    ) -> list[str]:
+        hints = [
+            f"Use {reasoning_effort} reasoning effort for this turn.",
+            f"Aim for a {target_length} reply unless the user asks for more depth.",
+        ]
+        if perception.references_prior_context:
+            hints.append("Carry forward relevant recent context without repeating it verbatim.")
+        if working_memory.unresolved_questions:
+            hints.append("Prefer answers that reduce unresolved uncertainty when possible.")
+        if perception.primary_intent == "social_message":
+            hints.append("Keep the reply natural and conversational rather than analytical.")
+        return hints[:5]
+
+    def _derive_learning_objective(self, interaction_type: str, reasoning_effort: str, target_length: str) -> str:
+        return (
+            f"Learn whether {interaction_type} turns work best with "
+            f"{reasoning_effort} reasoning effort and {target_length} responses."
         )
 
     def _dedupe(self, values: list[str]) -> list[str]:
