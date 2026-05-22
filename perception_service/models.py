@@ -437,6 +437,41 @@ class MemoryDecayResponse(BaseModel):
     evaluation: MemoryDecayEvaluation
 
 
+class ConsolidationCandidate(BaseModel):
+    group_key: str
+    target_memory_type: str
+    target_key: str
+    target_value: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    source_memory_ids: list[str] = Field(default_factory=list)
+    rationale: str
+    commit_decision: str
+
+
+class MemoryConsolidationRequest(BaseModel):
+    memory_type: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    include_archived: bool = False
+    limit: int = Field(default=100, ge=1, le=500)
+    min_group_size: int = Field(default=2, ge=2, le=20)
+    persist_consolidated: bool = True
+    archive_sources: bool = False
+
+
+class MemoryConsolidationEvaluation(BaseModel):
+    source_count: int = Field(ge=0)
+    candidate_count: int = Field(ge=0)
+    consolidated_count: int = Field(ge=0)
+    archived_source_count: int = Field(ge=0)
+
+
+class MemoryConsolidationResponse(BaseModel):
+    candidates: list[ConsolidationCandidate] = Field(default_factory=list)
+    consolidated_memories: list[MemoryRecord] = Field(default_factory=list)
+    archived_source_ids: list[str] = Field(default_factory=list)
+    evaluation: MemoryConsolidationEvaluation
+
+
 class RetrievedMemory(BaseModel):
     memory_id: str
     memory_type: str

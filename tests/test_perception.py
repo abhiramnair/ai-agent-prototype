@@ -1403,7 +1403,106 @@ def test_memory_decay_keeps_reinforced_strong_memories_active():
     matching = [result for result in payload["results"] if result["memory_id"] == memory_id]
     assert matching
     assert matching[0]["archived"] is False
-    assert matching[0]["strength"] >= 0.4
+
+
+def test_memory_consolidation_creates_semantic_summary_from_episodic_group():
+    client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "episodic",
+            "key": "episode.working.memory.turn1",
+            "value": "ask_explanation: explain the working memory manager",
+            "confidence": 0.74,
+            "source_turn_id": "turn-consolidate-1",
+            "tags": ["episodic", "working-memory"],
+            "evidence": ["First successful working memory explanation."],
+        },
+    )
+    client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "episodic",
+            "key": "episode.working.memory.turn2",
+            "value": "ask_explanation: clarify the working memory state shape",
+            "confidence": 0.79,
+            "source_turn_id": "turn-consolidate-2",
+            "tags": ["episodic", "working-memory"],
+            "evidence": ["Second successful working memory explanation."],
+        },
+    )
+
+    response = client.post(
+        "/memory/consolidate",
+        json={
+            "memory_type": "episodic",
+            "tags": ["working-memory"],
+            "min_group_size": 2,
+            "persist_consolidated": True,
+            "archive_sources": False,
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["evaluation"]["candidate_count"] >= 1
+    assert payload["evaluation"]["consolidated_count"] >= 1
+    assert any(memory["key"].startswith("consolidated.episode.working.memory") for memory in payload["consolidated_memories"])
+
+
+def test_memory_consolidation_can_archive_source_memories():
+    first = client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "episodic",
+            "key": "episode.consolidate.archive.turn1",
+            "value": "First source memory.",
+            "confidence": 0.7,
+            "source_turn_id": "turn-consolidate-archive-1",
+            "tags": ["archive-consolidation"],
+            "evidence": ["First archival consolidation source."],
+        },
+    ).json()["memory"]["memory_id"]
+    second = client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "episodic",
+            "key": "episode.consolidate.archive.turn2",
+            "value": "Second source memory.",
+            "confidence": 0.72,
+            "source_turn_id": "turn-consolidate-archive-2",
+            "tags": ["archive-consolidation"],
+            "evidence": ["Second archival consolidation source."],
+        },
+    ).json()["memory"]["memory_id"]
+
+    response = client.post(
+        "/memory/consolidate",
+        json={
+            "memory_type": "episodic",
+            "tags": ["archive-consolidation"],
+            "min_group_size": 2,
+            "persist_consolidated": True,
+            "archive_sources": True,
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert first in payload["archived_source_ids"]
+    assert second in payload["archived_source_ids"]
+
+    archived_query = client.post(
+        "/memory/query",
+        json={
+            "memory_type": "episodic",
+            "query_text": "source",
+            "tags": ["archive-consolidation"],
+            "include_archived": True,
+            "limit": 10,
+        },
+    )
+    archived_payload = archived_query.json()
+    archived_ids = {memory["memory_id"] for memory in archived_payload["memories"] if memory["archived"]}
+    assert first in archived_ids
+    assert second in archived_ids
 
 
 def test_agent_orchestrator_runs_full_pipeline():

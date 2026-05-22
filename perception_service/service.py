@@ -26,6 +26,8 @@ from .models import (
     MemoryCommitResponse,
     MemoryArchiveRequest,
     MemoryArchiveResponse,
+    MemoryConsolidationRequest,
+    MemoryConsolidationResponse,
     MemoryDecayRequest,
     MemoryDecayResponse,
     MemoryMutationResponse,
@@ -47,6 +49,7 @@ from .critic import ResponseCritic
 from .dialogue_planner import DialoguePlanner
 from .generator import BaseLLMGenerator
 from .memory_committer import MemoryCommitter
+from .memory_consolidator import MemoryConsolidator
 from .memory_retriever import MemoryRetriever
 from .memory_store import MemoryStore
 from .orchestrator import AgentOrchestrator
@@ -69,6 +72,7 @@ def create_app() -> FastAPI:
     generator = BaseLLMGenerator()
     critic = ResponseCritic()
     memory_committer = MemoryCommitter(memory_store)
+    memory_consolidator = MemoryConsolidator(memory_store)
     session_state_store = SessionStateStore()
     prompt_assembler = PromptAssembler(memory_retriever=memory_retriever)
     orchestrator = AgentOrchestrator(
@@ -131,6 +135,10 @@ def create_app() -> FastAPI:
     @app.post("/memory/decay", response_model=MemoryDecayResponse)
     def decay_memory(request: MemoryDecayRequest) -> MemoryDecayResponse:
         return memory_store.decay(request)
+
+    @app.post("/memory/consolidate", response_model=MemoryConsolidationResponse)
+    def consolidate_memory(request: MemoryConsolidationRequest) -> MemoryConsolidationResponse:
+        return memory_consolidator.consolidate(request)
 
     @app.post("/memory/retrieve", response_model=MemoryRetrievalResponse)
     def retrieve_memory(request: MemoryRetrievalRequest) -> MemoryRetrievalResponse:
