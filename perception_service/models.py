@@ -478,6 +478,14 @@ class MemoryConflictResolutionResponse(BaseModel):
     evaluation: MemoryConflictResolutionEvaluation
 
 
+class MemoryStats(BaseModel):
+    total_count: int = Field(ge=0)
+    active_count: int = Field(ge=0)
+    archived_count: int = Field(ge=0)
+    pending_conflict_count: int = Field(ge=0)
+    consolidated_count: int = Field(ge=0)
+
+
 class ConsolidationCandidate(BaseModel):
     group_key: str
     target_memory_type: str
@@ -511,6 +519,33 @@ class MemoryConsolidationResponse(BaseModel):
     consolidated_memories: list[MemoryRecord] = Field(default_factory=list)
     archived_source_ids: list[str] = Field(default_factory=list)
     evaluation: MemoryConsolidationEvaluation
+
+
+class MemoryMaintenanceRequest(BaseModel):
+    resolve_conflicts: bool = True
+    resolution_strategy: str = "prefer_high_confidence"
+    consolidate_memories: bool = True
+    min_consolidation_group_size: int = Field(default=2, ge=2, le=20)
+    archive_consolidated_sources: bool = False
+    decay_memories: bool = True
+    decay_threshold: float = Field(default=0.35, ge=0.0, le=1.0)
+    max_idle_days: int = Field(default=30, ge=0)
+    include_archived: bool = False
+
+
+class MemoryMaintenanceEvaluation(BaseModel):
+    ran_conflict_resolution: bool
+    ran_consolidation: bool
+    ran_decay: bool
+
+
+class MemoryMaintenanceResponse(BaseModel):
+    stats_before: MemoryStats
+    stats_after: MemoryStats
+    conflict_resolution: MemoryConflictResolutionResponse | None = None
+    consolidation: MemoryConsolidationResponse | None = None
+    decay: MemoryDecayResponse | None = None
+    evaluation: MemoryMaintenanceEvaluation
 
 
 class RetrievedMemory(BaseModel):
@@ -636,3 +671,4 @@ class HealthResponse(BaseModel):
     llm_model: str
     ollama_reachable: bool
     memory_records_available: bool
+    memory_stats: MemoryStats

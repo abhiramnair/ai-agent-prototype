@@ -1607,6 +1607,85 @@ def test_memory_consolidation_can_archive_source_memories():
     assert second in archived_ids
 
 
+def test_memory_stats_and_maintenance_cover_full_lifecycle():
+    client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "preference",
+            "key": "maintenance.preference.answer_style",
+            "value": "User prefers concise answers.",
+            "confidence": 0.9,
+            "source_turn_id": "turn-maintain-1",
+            "tags": ["maintenance", "preference"],
+            "evidence": ["Initial maintenance preference."],
+        },
+    )
+    client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "preference",
+            "key": "maintenance.preference.answer_style",
+            "value": "User prefers detailed answers.",
+            "confidence": 0.55,
+            "source_turn_id": "turn-maintain-2",
+            "tags": ["maintenance", "preference"],
+            "evidence": ["Contradictory maintenance preference."],
+        },
+    )
+    client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "episodic",
+            "key": "maintenance.episode.turn1",
+            "value": "The user asked for a system blueprint.",
+            "confidence": 0.75,
+            "source_turn_id": "turn-maintain-3",
+            "tags": ["maintenance", "episodic"],
+            "evidence": ["First maintenance episodic memory."],
+        },
+    )
+    client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "episodic",
+            "key": "maintenance.episode.turn2",
+            "value": "The user asked for the same system blueprint with more detail.",
+            "confidence": 0.78,
+            "source_turn_id": "turn-maintain-4",
+            "tags": ["maintenance", "episodic"],
+            "evidence": ["Second maintenance episodic memory."],
+        },
+    )
+
+    stats_before = client.get("/memory/stats")
+    stats_before_payload = stats_before.json()
+    assert stats_before.status_code == 200
+    assert stats_before_payload["pending_conflict_count"] >= 1
+
+    maintain = client.post(
+        "/memory/maintain",
+        json={
+            "resolve_conflicts": True,
+            "resolution_strategy": "prefer_high_confidence",
+            "consolidate_memories": True,
+            "min_consolidation_group_size": 2,
+            "archive_consolidated_sources": False,
+            "decay_memories": True,
+            "decay_threshold": 0.2,
+            "max_idle_days": 365,
+        },
+    )
+    payload = maintain.json()
+    assert maintain.status_code == 200
+    assert payload["evaluation"]["ran_conflict_resolution"] is True
+    assert payload["evaluation"]["ran_consolidation"] is True
+    assert payload["evaluation"]["ran_decay"] is True
+    assert payload["conflict_resolution"]["evaluation"]["resolved_count"] >= 1
+    assert payload["consolidation"]["evaluation"]["consolidated_count"] >= 1
+    assert payload["stats_after"]["pending_conflict_count"] <= payload["stats_before"]["pending_conflict_count"]
+    assert payload["stats_after"]["consolidated_count"] >= payload["stats_before"]["consolidated_count"]
+
+
 def test_agent_orchestrator_runs_full_pipeline():
     turn = make_turn(
         turn_id="turn-orchestrator-1",
@@ -1721,6 +1800,12 @@ def test_session_state_persists_across_agent_runs():
 
 
 def test_config_and_health_endpoints_return_runtime_information():
+    stats_response = client.get("/memory/stats")
+    assert stats_response.status_code == 200
+    stats_payload = stats_response.json()
+    assert "total_count" in stats_payload
+    assert "pending_conflict_count" in stats_payload
+
     config_response = client.get("/config")
     assert config_response.status_code == 200
     config_payload = config_response.json()
@@ -1732,3 +1817,4 @@ def test_config_and_health_endpoints_return_runtime_information():
     health_payload = health_response.json()
     assert health_payload["status"] in {"ok", "degraded"}
     assert "llm_provider" in health_payload
+    assert "memory_stats" in health_payload

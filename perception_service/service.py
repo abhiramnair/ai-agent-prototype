@@ -32,11 +32,14 @@ from .models import (
     MemoryConsolidationResponse,
     MemoryDecayRequest,
     MemoryDecayResponse,
+    MemoryMaintenanceRequest,
+    MemoryMaintenanceResponse,
     MemoryMutationResponse,
     MemoryQueryRequest,
     MemoryQueryResponse,
     MemoryRetrievalRequest,
     MemoryRetrievalResponse,
+    MemoryStats,
     MemoryUpsertRequest,
     HealthResponse,
     PerceptionState,
@@ -53,6 +56,7 @@ from .generator import BaseLLMGenerator
 from .memory_committer import MemoryCommitter
 from .memory_consolidator import MemoryConsolidator
 from .memory_conflict_resolver import MemoryConflictResolver
+from .memory_maintenance import MemoryMaintenanceService
 from .memory_retriever import MemoryRetriever
 from .memory_store import MemoryStore
 from .orchestrator import AgentOrchestrator
@@ -77,6 +81,11 @@ def create_app() -> FastAPI:
     memory_committer = MemoryCommitter(memory_store)
     memory_conflict_resolver = MemoryConflictResolver(memory_store)
     memory_consolidator = MemoryConsolidator(memory_store)
+    memory_maintenance = MemoryMaintenanceService(
+        store=memory_store,
+        conflict_resolver=memory_conflict_resolver,
+        consolidator=memory_consolidator,
+    )
     session_state_store = SessionStateStore()
     prompt_assembler = PromptAssembler(memory_retriever=memory_retriever)
     orchestrator = AgentOrchestrator(
@@ -148,6 +157,14 @@ def create_app() -> FastAPI:
     def consolidate_memory(request: MemoryConsolidationRequest) -> MemoryConsolidationResponse:
         return memory_consolidator.consolidate(request)
 
+    @app.get("/memory/stats", response_model=MemoryStats)
+    def get_memory_stats() -> MemoryStats:
+        return memory_maintenance.stats()
+
+    @app.post("/memory/maintain", response_model=MemoryMaintenanceResponse)
+    def maintain_memory(request: MemoryMaintenanceRequest) -> MemoryMaintenanceResponse:
+        return memory_maintenance.maintain(request)
+
     @app.post("/memory/retrieve", response_model=MemoryRetrievalResponse)
     def retrieve_memory(request: MemoryRetrievalRequest) -> MemoryRetrievalResponse:
         return memory_retriever.retrieve(request)
@@ -187,6 +204,7 @@ def create_app() -> FastAPI:
         memory_records_available = memory_store.query(
             MemoryQueryRequest(limit=1, include_archived=True)
         ).evaluation.total_matches >= 0
+        memory_stats = memory_maintenance.stats()
         ollama_reachable = provider_name != "ollama"
 
         if provider_name == "ollama":
@@ -205,6 +223,7 @@ def create_app() -> FastAPI:
             llm_model=model_name,
             ollama_reachable=ollama_reachable,
             memory_records_available=memory_records_available,
+            memory_stats=memory_stats,
         )
 
     return app
