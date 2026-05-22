@@ -1405,6 +1405,108 @@ def test_memory_decay_keeps_reinforced_strong_memories_active():
     assert matching[0]["archived"] is False
 
 
+def test_memory_upsert_preserves_conflict_history_on_contradictory_update():
+    first = client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "preference",
+            "key": "conflict.preference.style",
+            "value": "User prefers concise answers.",
+            "confidence": 0.9,
+            "source_turn_id": "turn-conflict-1",
+            "tags": ["conflict-test", "preference"],
+            "evidence": ["Initial preference statement."],
+        },
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "preference",
+            "key": "conflict.preference.style",
+            "value": "User prefers deep detailed answers.",
+            "confidence": 0.62,
+            "source_turn_id": "turn-conflict-2",
+            "tags": ["conflict-test", "preference"],
+            "evidence": ["Later contradictory preference statement."],
+        },
+    )
+    payload = second.json()
+    assert second.status_code == 200
+    assert payload["created"] is False
+    assert payload["memory"]["contradiction_count"] == 1
+    assert payload["memory"]["reinforcement_count"] == 1
+    assert payload["memory"]["metadata"]["resolution_status"] == "pending"
+    assert len(payload["memory"]["metadata"]["conflict_history"]) == 1
+    assert payload["memory"]["metadata"]["conflict_history"][0]["value"] == "User prefers concise answers."
+
+
+def test_memory_conflict_resolution_can_restore_high_confidence_value():
+    create = client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "preference",
+            "key": "conflict.preference.depth",
+            "value": "User prefers short answers.",
+            "confidence": 0.95,
+            "source_turn_id": "turn-conflict-resolve-1",
+            "tags": ["conflict-resolution", "preference"],
+            "evidence": ["High-confidence original preference."],
+        },
+    )
+    assert create.status_code == 200
+
+    conflict = client.post(
+        "/memory/upsert",
+        json={
+            "memory_type": "preference",
+            "key": "conflict.preference.depth",
+            "value": "User prefers long answers.",
+            "confidence": 0.41,
+            "source_turn_id": "turn-conflict-resolve-2",
+            "tags": ["conflict-resolution", "preference"],
+            "evidence": ["Contradictory lower-confidence update."],
+        },
+    )
+    conflict_payload = conflict.json()
+    memory_id = conflict_payload["memory"]["memory_id"]
+    assert conflict.status_code == 200
+    assert conflict_payload["memory"]["value"] == "User prefers long answers."
+
+    response = client.post(
+        "/memory/conflicts/resolve",
+        json={
+            "memory_type": "preference",
+            "tags": ["conflict-resolution"],
+            "resolution_strategy": "prefer_high_confidence",
+            "persist_resolution": True,
+        },
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["evaluation"]["candidate_count"] >= 1
+    assert payload["evaluation"]["resolved_count"] >= 1
+    assert payload["evaluation"]["switched_value_count"] >= 1
+    assert payload["candidates"][0]["suggested_resolution"] == "prefer_high_confidence"
+    assert payload["resolved_memories"][0]["memory_id"] == memory_id
+    assert payload["resolved_memories"][0]["value"] == "User prefers short answers."
+    assert payload["resolved_memories"][0]["metadata"]["resolution_status"] == "resolved"
+
+    query = client.post(
+        "/memory/query",
+        json={
+            "memory_type": "preference",
+            "query_text": "short answers",
+            "tags": ["conflict-resolution"],
+            "limit": 5,
+        },
+    )
+    query_payload = query.json()
+    assert query.status_code == 200
+    assert any(memory["memory_id"] == memory_id and memory["value"] == "User prefers short answers." for memory in query_payload["memories"])
+
+
 def test_memory_consolidation_creates_semantic_summary_from_episodic_group():
     client.post(
         "/memory/upsert",

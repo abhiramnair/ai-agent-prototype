@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 import logging
+import re
 from uuid import uuid4
 
 from .models import (
@@ -40,6 +41,14 @@ class MemoryRepository(ABC):
     def decay(self, request: MemoryDecayRequest) -> MemoryDecayResponse:
         raise NotImplementedError
 
+    @abstractmethod
+    def list_records(self, include_archived: bool = False) -> list[MemoryRecord]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def save(self, memory: MemoryRecord) -> MemoryRecord:
+        raise NotImplementedError
+
 
 class InMemoryMemoryRepository(MemoryRepository):
     def __init__(self) -> None:
@@ -49,19 +58,22 @@ class InMemoryMemoryRepository(MemoryRepository):
         now = datetime.now(timezone.utc)
         existing = self._find_existing(request)
         if existing:
-            updated = existing.model_copy(
-                update={
-                    "value": request.value,
-                    "confidence": request.confidence,
-                    "source_turn_id": request.source_turn_id or existing.source_turn_id,
-                    "tags": self._merge_lists(existing.tags, request.tags),
-                    "evidence": self._merge_lists(existing.evidence, request.evidence),
-                    "metadata": existing.metadata | request.metadata,
-                    "updated_at": now,
-                    "reinforcement_count": existing.reinforcement_count + 1,
-                    "archived": False,
-                }
-            )
+            if self._is_contradictory_update(existing, request):
+                updated = self._build_conflict_update(existing, request, now)
+            else:
+                updated = existing.model_copy(
+                    update={
+                        "value": request.value,
+                        "confidence": request.confidence,
+                        "source_turn_id": request.source_turn_id or existing.source_turn_id,
+                        "tags": self._merge_lists(existing.tags, request.tags),
+                        "evidence": self._merge_lists(existing.evidence, request.evidence),
+                        "metadata": self._merge_metadata(existing.metadata, request.metadata),
+                        "updated_at": now,
+                        "reinforcement_count": existing.reinforcement_count + 1,
+                        "archived": False,
+                    }
+                )
             self._records[updated.memory_id] = updated
             logger.info("memory_upsert_updated", extra={"memory_id": updated.memory_id})
             return MemoryMutationResponse(memory=updated, created=False)
@@ -170,6 +182,16 @@ class InMemoryMemoryRepository(MemoryRepository):
             ),
         )
 
+    def list_records(self, include_archived: bool = False) -> list[MemoryRecord]:
+        records = list(self._records.values())
+        if include_archived:
+            return records
+        return [record for record in records if not record.archived]
+
+    def save(self, memory: MemoryRecord) -> MemoryRecord:
+        self._records[memory.memory_id] = memory
+        return memory
+
     def _find_existing(self, request: MemoryUpsertRequest) -> MemoryRecord | None:
         if request.memory_id and request.memory_id in self._records:
             return self._records[request.memory_id]
@@ -190,7 +212,11 @@ class InMemoryMemoryRepository(MemoryRepository):
         return query_tokens.issubset(self._tokenize(searchable))
 
     def _tokenize(self, text: str) -> set[str]:
-        return {token.strip().lower() for token in text.split() if token.strip()}
+        return {
+            token.lower()
+            for token in re.findall(r"[A-Za-z0-9_:-]+", text)
+            if token.strip()
+        }
 
     def _merge_lists(self, existing: list[str], new_values: list[str]) -> list[str]:
         seen: set[str] = set()
@@ -203,6 +229,56 @@ class InMemoryMemoryRepository(MemoryRepository):
             seen.add(key)
             merged.append(cleaned)
         return merged
+
+    def _merge_metadata(self, existing: dict, new_values: dict) -> dict:
+        merged = existing | new_values
+        if "resolution_status" in existing and "resolution_status" not in new_values:
+            merged["resolution_status"] = existing["resolution_status"]
+        return merged
+
+    def _normalize_text(self, text: str) -> str:
+        return " ".join(text.lower().split())
+
+    def _is_contradictory_update(self, memory: MemoryRecord, request: MemoryUpsertRequest) -> bool:
+        return self._normalize_text(memory.value) != self._normalize_text(request.value)
+
+    def _build_conflict_update(
+        self,
+        existing: MemoryRecord,
+        request: MemoryUpsertRequest,
+        now: datetime,
+    ) -> MemoryRecord:
+        conflict_history = list(existing.metadata.get("conflict_history", []))
+        conflict_history.append(
+            {
+                "value": existing.value,
+                "confidence": existing.confidence,
+                "source_turn_id": existing.source_turn_id,
+                "observed_at": existing.updated_at.isoformat(),
+            }
+        )
+        metadata = self._merge_metadata(existing.metadata, request.metadata)
+        metadata.update(
+            {
+                "conflict_history": conflict_history,
+                "resolution_status": "pending",
+                "last_conflict_at": now.isoformat(),
+            }
+        )
+        blended_confidence = max(0.1, min(1.0, round(((existing.confidence + request.confidence) / 2.0) - 0.08, 2)))
+        return existing.model_copy(
+            update={
+                "value": request.value,
+                "confidence": blended_confidence,
+                "source_turn_id": request.source_turn_id or existing.source_turn_id,
+                "tags": self._merge_lists(existing.tags, request.tags),
+                "evidence": self._merge_lists(existing.evidence, request.evidence),
+                "metadata": metadata,
+                "updated_at": now,
+                "contradiction_count": existing.contradiction_count + 1,
+                "archived": False,
+            }
+        )
 
     def _compute_strength(
         self,
@@ -242,3 +318,9 @@ class MemoryStore:
 
     def decay(self, request: MemoryDecayRequest) -> MemoryDecayResponse:
         return self.repository.decay(request)
+
+    def list_records(self, include_archived: bool = False) -> list[MemoryRecord]:
+        return self.repository.list_records(include_archived=include_archived)
+
+    def save(self, memory: MemoryRecord) -> MemoryRecord:
+        return self.repository.save(memory)

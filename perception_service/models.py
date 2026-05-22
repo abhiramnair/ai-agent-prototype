@@ -437,6 +437,47 @@ class MemoryDecayResponse(BaseModel):
     evaluation: MemoryDecayEvaluation
 
 
+class MemoryConflictValue(BaseModel):
+    value: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    source_turn_id: str | None = None
+    observed_at: datetime | None = None
+
+
+class MemoryConflictCandidate(BaseModel):
+    memory_id: str
+    memory_type: str
+    key: str
+    current_value: str
+    current_confidence: float = Field(ge=0.0, le=1.0)
+    conflicting_values: list[MemoryConflictValue] = Field(default_factory=list)
+    contradiction_count: int = Field(ge=0)
+    severity: str
+    suggested_resolution: str
+
+
+class MemoryConflictResolutionRequest(BaseModel):
+    memory_type: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    include_archived: bool = False
+    limit: int = Field(default=100, ge=1, le=500)
+    resolution_strategy: str = "prefer_high_confidence"
+    persist_resolution: bool = True
+
+
+class MemoryConflictResolutionEvaluation(BaseModel):
+    source_count: int = Field(ge=0)
+    candidate_count: int = Field(ge=0)
+    resolved_count: int = Field(ge=0)
+    switched_value_count: int = Field(ge=0)
+
+
+class MemoryConflictResolutionResponse(BaseModel):
+    candidates: list[MemoryConflictCandidate] = Field(default_factory=list)
+    resolved_memories: list[MemoryRecord] = Field(default_factory=list)
+    evaluation: MemoryConflictResolutionEvaluation
+
+
 class ConsolidationCandidate(BaseModel):
     group_key: str
     target_memory_type: str
